@@ -837,6 +837,7 @@ class Calibration:
 
         self.__controls_values = jnp.vstack(controls_values)
         self.__controls_masks = jnp.vstack(controls_masks)
+
         assert self.__controls_values.shape == self.__controls_masks.shape
 
         assert has_blank, f'BLANK control not found. Should be named any of {VALID_BLANK_NAMES}'
@@ -932,7 +933,7 @@ class Calibration:
         return pd.DataFrame(X, columns=self.__fluo_proteins)
 
     def plot_beads_diagnostics(self):
-        if self.__log_beads_peaks is None:
+        if not self.__fitted:
             raise ValueError('You must fit the calibration first')
 
         plot_bead_peaks_diagnostics(
@@ -957,6 +958,8 @@ class Calibration:
         plt.show()
 
     def plot_bleedthrough_diagnostics(self):
+        if not self.__fitted:
+            raise ValueError('You must fit the calibration first')
         fig, ax = plt.subplots()
         im = ax.imshow(self.__bleedthrough_matrix, cmap='viridis')
         ax.set_xticks(range(len(self.__channel_order)))
@@ -970,6 +973,8 @@ class Calibration:
 
 
     def plot_color_mapping_diagnostics(self):
+        if not self.__fitted:
+            raise ValueError('You must fit the calibration first')
         fig, ax = plt.subplots(1, 1)
         # plot transform
         NP = len(self.__fluo_proteins)
