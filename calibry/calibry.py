@@ -1,6 +1,8 @@
 import jax
+# jax.config.update("jax_platform_name", "cpu")
 import optax
 from jax import jit, vmap
+
 import jax.numpy as jnp
 from jax.tree_util import Partial as partial
 from jax.scipy.stats import gaussian_kde
@@ -19,6 +21,7 @@ import matplotlib.pyplot as plt
 import flowio
 
 from typing import List, Dict, Tuple
+import logging
 
 
 ### {{{             --     some default bead configurations     --
@@ -576,7 +579,8 @@ def spectral_bleedthrough(Y, M, max_iterations=50, jax_seed=0, verbose=False):
 
     @jit
     def alsq(K):  # one iteration of alternating least squares
-        S = normalize(jnp.linalg.pinv(K[:, None] * M) @ Y)  # find S from K
+        S = jnp.linalg.lstsq(K[:, None] * M, Y, rcond=None)[0]
+        S = normalize(S)  # find S from K
         K = Y @ jnp.linalg.pinv(S)  # find K from S
         K = jnp.average(K, axis=1, weights=M)
         K = jnp.maximum(jnp.nan_to_num(K, nan=0), 0)
@@ -587,7 +591,7 @@ def spectral_bleedthrough(Y, M, max_iterations=50, jax_seed=0, verbose=False):
         S, K = alsq(K)
         error = ((Y - (K[:, None] * M) @ S) ** 2).mean() / jnp.linalg.norm(Y)
         if verbose:
-            print(f'error: {error:.2e}, update: {jnp.mean((Sprev - S)**2):.2e}')
+            print(f'error: {error:.2e}, update: {jnp.mean((Sprev - S)**2):.2e}, S: {S}')
         Sprev = S
 
     return S, K
@@ -662,7 +666,7 @@ from tqdm import tqdm
 from scipy.interpolate import LSQUnivariateSpline
 
 DEFAULT_CMAP_Q = np.array([0.7, 0.8])  # where to put spline knots
-DEFAULT_CLAMP_Q = np.array([0.0001, 0.9999])  # where to clamp values
+DEFAULT_CLAMP_Q = np.array([0.0001, 0.999])  # where to clamp values
 
 
 def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q):
@@ -670,20 +674,33 @@ def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q):
     x_order = np.argsort(X, axis=0)
     Xx, Yx = np.take_along_axis(X, x_order, axis=0), Y[x_order]
     w = 0.25 * np.ones_like(Y)
-    X6 = Xx[-6]
     xknots = np.linspace(np.quantile(X, Q[0], axis=0), np.quantile(X, Q[1], axis=0), n_knots).T
-    splines = [
-        LSQUnivariateSpline(Xx[:, c], Yx[:, c], k=spline_order, t=xknots[c], w=w)
-        for c in tqdm(range(X.shape[1]))
-    ]
+    splines = []
+    for c in range(X.shape[1]):
+        try:
+            spline = LSQUnivariateSpline(Xx[:, c], Yx[:, c], k=spline_order, t=xknots[c], w=w)
+            splines.append(spline)
+        except:
+            msg = f'failed to fit spline for channel {c}, with X = {Xx[:, c]}'
+            logging.warning(msg)
+            splines.append(lambda x: x)
+
+
     y_order = np.argsort(Y, axis=0)
     Xy, Yy = X[y_order], Y[y_order]
     yknots = np.linspace(
         np.quantile(Yy, Q[0], axis=0), np.quantile(Yy, Q[-1], axis=0), n_knots, endpoint=True
     ).T
-    inv_splines = [
-        LSQUnivariateSpline(Yy, Xy[:, c], k=spline_order, t=yknots, w=w) for c in range(X.shape[1])
-    ]
+    inv_splines = []
+    for c in range(X.shape[1]):
+        try:
+            spline = LSQUnivariateSpline(Yy, Xy[:, c], k=spline_order, t=yknots, w=w)
+            inv_splines.append(spline)
+        except:
+            msg = f'failed to fit spline for channel {c}, with Y = {Yy}'
+            logging.warning(msg)
+            inv_splines.append(lambda x: x)
+
     transform = lambda X: np.array([s(x * CF) / CF for s, x in zip(splines, X.T)]).T
     inv_transform = lambda Y: np.array([s(y * CF) / CF for s, y in zip(inv_splines, Y.T)]).T
 
@@ -793,7 +810,10 @@ class Calibration:
             )
         )
 
-        assert self.reference_protein in self.__fluo_proteins
+        assert self.reference_protein in self.__fluo_proteins, (
+            f'Unknown reference protein {self.reference_protein}. '
+            f'Available proteins are {self.__fluo_proteins}'
+        )
 
         controls_values, controls_masks = [], []
         NPROTEINS = len(self.__fluo_proteins)
@@ -867,8 +887,12 @@ class Calibration:
         refprotid = self.__fluo_proteins.index(self.reference_protein)
         X = X[jnp.all(X > 1, axis=1)]
         logX = logtransform(X, self.__log_scale_factor, 0)
+        MAX_VALID_VALUE = 0.95
+        logX = logX[jnp.all(logX < MAX_VALID_VALUE, axis=1)]
         self.cmap_transform, self.cmap_inv_transform = cmap_spline(logX, logX[:, refprotid])
         self.clamp_values = jnp.quantile(logX, DEFAULT_CLAMP_Q, axis=0)
+        # clamp to min of quantile-based clamp and MAX_VALID_VALUE
+        self.clamp_values = jnp.minimum(self.clamp_values, MAX_VALID_VALUE)
 
         self.__fitted = True
         print('Done fitting in {:.2f} seconds'.format(time.time() - t0))
@@ -930,6 +954,20 @@ class Calibration:
             right side shows beads intensities in their respective MEF units
             left side shows the real beads data after calibration\n\n"""
         )
+        plt.show()
+
+    def plot_bleedthrough_diagnostics(self):
+        fig, ax = plt.subplots()
+        im = ax.imshow(self.__bleedthrough_matrix, cmap='viridis')
+        ax.set_xticks(range(len(self.__channel_order)))
+        ax.set_xticklabels(self.__channel_order)
+        ax.set_yticks(range(len(self.__fluo_proteins)))
+        ax.set_yticklabels(self.__fluo_proteins)
+        ax.set_xlabel('Channels')
+        ax.set_ylabel('Proteins')
+        fig.colorbar(im, ax=ax)
+        plt.show()
+
 
     def plot_color_mapping_diagnostics(self):
         fig, ax = plt.subplots(1, 1)
@@ -958,6 +996,7 @@ class Calibration:
         ax.set_xlabel('source')
         ax.set_ylabel('target')
         ax.set_title(f'Color mapping to {self.reference_protein}')
+        plt.show()
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}##
