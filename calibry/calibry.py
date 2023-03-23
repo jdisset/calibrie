@@ -935,22 +935,23 @@ class Calibration:
         after bleedthrough correction. Otherwise, the calibrated values are only returned in MEF units.
         """
         assert self.__fitted, 'You must fit the calibration first'
-        df.columns = escape(list(df.columns))
-        odf = df[self.__channel_order]
+        odf = df.copy()
+        odf.columns = escape(list(odf.columns))
+        odf = odf[self.__channel_order]
         X, au_X, to_keep = self.apply_to_array(odf.values)
         assert X.shape[1] == len(self.__fluo_proteins)
         assert X.shape == au_X.shape, f'X.shape={X.shape}, au_X.shape={au_X.shape}'
-
-        print(f'df nbrows: {df.shape[0]}, to_keep: {to_keep.sum()}, to_keep shape: {to_keep.shape}, odf shape: {odf.shape}, X shape: {X.shape}')
+        assert len(to_keep) == len(df)
 
         xdf = pd.DataFrame(X, columns=self.__fluo_proteins)
         if include_arbitraty_units:
             # we append au_X, with column names of fluo_proteins with _AU appended
             au_xdf = pd.DataFrame(au_X, columns=[p + '_AU' for p in self.__fluo_proteins])
             xdf = pd.concat([xdf, au_xdf], axis=1)
+
         if preserve_columns:
-            # we keep the original df columns (only for to_keep rows)
-            xdf = pd.concat([df[to_keep], xdf], axis=1)
+            to_keep_df = df[to_keep].reset_index(drop=True)
+            xdf = pd.concat([to_keep_df, xdf], axis=1)
         return xdf
 
 
