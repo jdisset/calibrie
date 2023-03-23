@@ -898,22 +898,21 @@ class Calibration:
         self.__fitted = True
         print('Done fitting in {:.2f} seconds'.format(time.time() - t0))
 
-    def apply_bleedthrough_correction(self,Y):
-        assert self.__fitted, 'You must fit the calibration first'
-        X = Y @ jnp.linalg.pinv(self.__bleedthrough_matrix)  # apply bleedthrough
-        X += self.__offset  # add offset
-        X = X[jnp.all(X > 1, axis=1)]
-        return X
 
     def apply_to_array(self, Y):
 
         assert self.__fitted, 'You must fit the calibration first'
         Y = Y - self.__autofluorescence  # remove autofluorescence
-        X = self.apply_bleedthrough_correction(Y)
+        bleedthrough_X = Y @ jnp.linalg.pinv(self.__bleedthrough_matrix)  # apply bleedthrough
+        bleedthrough_X += self.__offset  # add offset
 
-        logX = logtransform(X, self.__log_scale_factor, 0)
-        logX = logX[jnp.all(logX > self.clamp_values[0], axis=1)]
-        logX = logX[jnp.all(logX < self.clamp_values[1], axis=1)]
+        to_keep = np.all(bleedthrough_X > 1, axis=1)
+        logX = logtransform(bleedthrough_X, self.__log_scale_factor, 0)
+
+        to_keep = np.logical_and(to_keep, np.all(logX > self.clamp_values[0], axis=1))
+        to_keep = np.logical_and(to_keep, np.all(logX < self.clamp_values[1], axis=1))
+        logX = logX[to_keep]
+
         cmapX = self.cmap_transform(logX)
 
         refchanid = self.__beads_channel_order.index(self.reference_channel)
@@ -921,16 +920,39 @@ class Calibration:
             [self.beads_transform[refchanid](cmapX[:, i]) for i in range(cmapX.shape[1])]
         ).T
 
-        finalX = inverse_logtransform(calibratedX, self.__log_scale_factor)
+        final_X = inverse_logtransform(calibratedX, self.__log_scale_factor)
 
-        return finalX
+        return final_X, bleedthrough_X[to_keep] - self.__offset, to_keep
 
-    def apply(self, df):
+    def apply(self, df, preserve_columns=False, include_arbitraty_units=False):
+        """
+        Apply the calibration to a dataframe of values.
+        Options:
+        - preserve_columns: if True, the columns of the dataframe are preserved, and the calibrated
+        values are appended to the dataframe. Otherwise, the dataframe is replaced by the calibrated
+        values.
+        - include_arbitraty_units: if True, the calibrated values are also returned in original arbitrary units
+        after bleedthrough correction. Otherwise, the calibrated values are only returned in MEF units.
+        """
         assert self.__fitted, 'You must fit the calibration first'
         df.columns = escape(list(df.columns))
-        df = df[self.__channel_order]
-        X = self.apply_to_array(df.values)
-        return pd.DataFrame(X, columns=self.__fluo_proteins)
+        odf = df[self.__channel_order]
+        X, au_X, to_keep = self.apply_to_array(odf.values)
+        assert X.shape[1] == len(self.__fluo_proteins)
+        assert X.shape == au_X.shape, f'X.shape={X.shape}, au_X.shape={au_X.shape}'
+
+        print(f'df nbrows: {df.shape[0]}, to_keep: {to_keep.sum()}, to_keep shape: {to_keep.shape}, odf shape: {odf.shape}, X shape: {X.shape}')
+
+        xdf = pd.DataFrame(X, columns=self.__fluo_proteins)
+        if include_arbitraty_units:
+            # we append au_X, with column names of fluo_proteins with _AU appended
+            au_xdf = pd.DataFrame(au_X, columns=[p + '_AU' for p in self.__fluo_proteins])
+            xdf = pd.concat([xdf, au_xdf], axis=1)
+        if preserve_columns:
+            # we keep the original df columns (only for to_keep rows)
+            xdf = pd.concat([df[to_keep], xdf], axis=1)
+        return xdf
+
 
     def plot_beads_diagnostics(self):
         if not self.__fitted:
