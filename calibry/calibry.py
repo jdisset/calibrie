@@ -845,19 +845,22 @@ class Calibration:
 
     ##────────────────────────────────────────────────────────────────────────────}}}
 
-    def fit(self):
+    def fit(self, verbose=True):
         t0 = time.time()
-        print('Estimating autofluorescence...')
+        if verbose:
+            print('Estimating autofluorescence...')
         zero_masks = self.__controls_masks.sum(axis=1) == 0
         self.__autofluorescence = np.median(self.__controls_values[zero_masks], axis=0)
 
-        print('Computing bleedthrough matrix...')
+        if verbose:
+            print('Computing bleedthrough matrix...')
         single_masks = self.__controls_masks.sum(axis=1) == 1
         masks = self.__controls_masks[single_masks]
         Y = self.__controls_values[single_masks] - self.__autofluorescence
         self.__bleedthrough_matrix, _ = spectral_bleedthrough(Y, masks)
 
-        print('Computing peaks assignment...')
+        if verbose:
+            print('Computing peaks assignment...')
         refprotid = self.__fluo_proteins.index(self.reference_protein)
         refchanid = jnp.argmax(self.__bleedthrough_matrix[refprotid])
         self.cal_units = self.channel_to_unit[self.__channel_order[refchanid]]
@@ -875,12 +878,14 @@ class Calibration:
             self.__log_beads_data, self.__log_beads_mef
         )
 
-        print('Computing channel calibration to MEF...')
+        if verbose:
+            print('Computing channel calibration to MEF...')
         self.beads_transform, self.beads_inv_transform = beads_fit_spline(
             self.__log_beads_peaks, self.__log_beads_mef
         )
 
-        print('Computing color mapping...')  # yi = xi mi S ;  gi = ai * log(yi) + bi
+        if verbose:
+            print('Computing color mapping...')  # yi = xi mi S ;  gi = ai * log(yi) + bi
         all_masks = self.__controls_masks.sum(axis=1) > 1
         fluo_X = self.__controls_values[all_masks] - self.__autofluorescence
         X = fluo_X @ jnp.linalg.pinv(self.__bleedthrough_matrix)
@@ -924,7 +929,7 @@ class Calibration:
 
         return final_X, bleedthrough_X[to_keep] - self.__offset, to_keep
 
-    def apply(self, df, preserve_columns=False, include_arbitraty_units=False):
+    def apply(self, df, preserve_columns=False, include_arbitraty_units=False, verbose=False):
         """
         Apply the calibration to a dataframe of values.
         Options:
@@ -1003,7 +1008,8 @@ class Calibration:
         NP = len(self.__fluo_proteins)
         all_masks = self.__controls_masks.sum(axis=1) > 1
         Y = self.__controls_values[all_masks] - self.__autofluorescence
-        X = self.apply_bleedthrough_correction(Y)
+        X = Y @ jnp.linalg.pinv(self.__bleedthrough_matrix)  # apply bleedthrough
+        X += self.__offset  # add offset
         logX = logtransform(X, self.__log_scale_factor, 0)
         logX = logX[jnp.all(logX > self.clamp_values[0], axis=1)]
         logX = logX[jnp.all(logX < self.clamp_values[1], axis=1)]
