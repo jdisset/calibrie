@@ -3,6 +3,12 @@ import pandas as pd
 from cytoflow import ImportOp, Tube, PolygonOp, ScatterplotView
 from pathlib import Path
 
+# increase matplotlib default figure size and resolution
+import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = [8, 8]
+plt.rcParams['figure.dpi'] = 100
+
+
 data_path = Path('./data').resolve()
 
 ### {{{                 --     load files into cytoflow     --
@@ -126,12 +132,6 @@ op0 = ImportOp(
 )
 
 xp = op0.apply()
-
-xp.conditions
-xp.channels
-xp.statistics
-xp.metadata
-xp.history
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
@@ -261,7 +261,7 @@ ScatterplotView(
 ).plot(ebfp_dg)
 
 
-calib_ebfp = cal.apply_to_cytoflow_xp(ebfp_dg, include_arbitrary_units=True)
+ebfp_calibrated = cal.apply_to_cytoflow_xp(ebfp_dg, include_arbitrary_units=True)
 
 ScatterplotView(
     xchannel='EBFP',
@@ -270,4 +270,4 @@ ScatterplotView(
     yscale='log',
     subset=
     '(double == "blue") and (ebfpt == True) and (eyfpt == True) and (mkatet == True) and (gate_1 == True) and (gate_2 == True) and (gate_3 == True)'
-).plot(calib_ebfp,ylim=(1e2, 1e8),xlim=(1e2, 1e8))
+).plot(ebfp_calibrated,ylim=(1e2, 1e8),xlim=(1e2, 1e8))

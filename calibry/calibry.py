@@ -1024,7 +1024,7 @@ class Calibration:
         odf = df.copy()
         odf.columns = escape(list(odf.columns))
         odf = odf[self.__channel_order]
-        X, au_X, to_keep = self.apply_to_array(odf.values) # to_keep is a boolean mask for the rows
+        X, au_X, to_keep = self.apply_to_array(odf.values)  # to_keep is a boolean mask for the rows
         assert X.shape[1] == len(self.__fluo_proteins)
         assert X.shape == au_X.shape, f'X.shape={X.shape}, au_X.shape={au_X.shape}'
         assert len(to_keep) == len(df)
@@ -1045,13 +1045,15 @@ class Calibration:
         return xdf
 
     def apply_to_cytoflow_xp(self, xp, **kwargs):
-        calibrated = self.apply(xp.data, preserve_columns=xp.channels, **kwargs)
-        xp.data.loc[:, xp.channels] = calibrated[xp.channels]
-        xp.data = xp.data.loc[calibrated.index] # remove rows that were filtered out
+        from copy import deepcopy
+        xp_copy = deepcopy(xp)
+        calibrated = self.apply(xp_copy.data, preserve_columns=xp_copy.channels, **kwargs)
+        xp_copy.data.loc[:, xp_copy.channels] = calibrated[xp_copy.channels]
+        xp_copy.data = xp_copy.data.loc[calibrated.index]  # remove rows that were filtered out
         for col in calibrated.columns:
-            if col not in xp.channels:
-                xp.add_channel(col, calibrated[col])
-        return xp
+            if col not in xp_copy.channels:
+                xp_copy.add_channel(col, calibrated[col])
+        return xp_copy
 
     def plot_beads_diagnostics(self):
         if not self.__fitted:
@@ -1106,7 +1108,7 @@ class Calibration:
         fig.colorbar(im, ax=ax)
         plt.show()
 
-    def plot_color_mapping_diagnostics(self, scatter_size=20, scatter_alpha=0.05):
+    def plot_color_mapping_diagnostics(self, scatter_size=25, scatter_alpha=0.05):
         if not self.__fitted:
             raise ValueError('You must fit the calibration first')
         fig, ax = plt.subplots(1, 1, figsize=(5, 5))
