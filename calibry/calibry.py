@@ -1,4 +1,5 @@
 import jax
+
 # jax.config.update("jax_platform_name", "cpu")
 import optax
 from jax import jit, vmap
@@ -78,6 +79,25 @@ def escape_name(name):
     return name.replace('-', '_').replace(' ', '_').upper().rstrip('_A')
 
 
+def get_bio_color(name, default='k'):
+    import difflib
+
+    colors = {'ebfp': '#529edb', 'eyfp': '#fbda73', 'mkate': '#f75a5a', 'neongreen': '#33f397'}
+    colors['fitc'] = colors['neongreen']
+    colors['gfp'] = colors['neongreen']
+    colors['pe_texas_red'] = colors['mkate']
+    colors['pacific_blue'] = colors['ebfp']
+    colors['AmCyan'] = '#00a4c7'
+    colors['apc'] = '#f75a5a'
+    colors['percp_cy5_5'] = colors['mkate']
+    closest = difflib.get_close_matches(name.lower(), colors.keys(), n=1)
+    if len(closest) == 0:
+        color = default
+    else:
+        color = colors[closest[0]]
+    return color
+
+
 def escape(names):
     if isinstance(names, str):
         return escape_name(names)
@@ -113,16 +133,21 @@ def load_fcs_to_df(fcs_file):
     return pd.DataFrame(original_data, columns=escape(channels))
 
 
-def load_to_df(file, column_order=None):
-    file = Path(file)
-    assert file.exists(), f'File {file} does not exist'
-    if file.suffix == '.fcs':
-        df = load_fcs_to_df(file)
-    elif file.suffix == '.csv':
-        df = pd.read_csv(file)
+def load_to_df(data, column_order=None):
+    # data can be either a pandas dataframe of a path to a file
+    if isinstance(data, pd.DataFrame):
+        df = data.copy()
         df.columns = escape(list(df.columns))
     else:
-        raise ValueError(f'File {file} has unknown suffix {file.suffix}')
+        data = Path(data)
+        assert data.exists(), f'File {data} does not exist'
+        if data.suffix == '.fcs':
+            df = load_fcs_to_df(data)
+        elif data.suffix == '.csv':
+            df = pd.read_csv(data)
+            df.columns = escape(list(df.columns))
+        else:
+            raise ValueError(f'File {data} has unknown suffix {data.suffix}')
     if column_order is not None:
         df = df[escape(column_order)]
     return df
@@ -140,7 +165,6 @@ def inverse_logtransform(x, scale, offset=0):
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 ### {{{                  --     beads related functions     --
-
 
 
 CALIBRATION_PEAKS_MIN_X = -0.025
@@ -274,8 +298,6 @@ def beads_fit_affine(logpeaks, logcalib, num_iter=5000, learning_rate=0.01, igno
     return params, losses
 
 
-
-
 def beads_fit_spline(
     logpeaks, logcalib, spline_degree=2, smooth_percent=1, CF=100, ignore_first_bead=True
 ):
@@ -342,7 +364,7 @@ def plot_bead_peaks_diagnostics(
     vmat,
     observations,
     color_channels,
-    max_obs=20000,
+    max_obs=10000,
     peaks_min_x=CALIBRATION_PEAKS_MIN_X,
     peaks_max_x=CALIBRATION_PEAKS_MAX_X,
 ):
@@ -459,7 +481,7 @@ def plot_beads_after_correction(
     observations,
     color_channels,
     channel_to_unit,
-    max_obs=20000,
+    max_obs=10000,
     title=None,
     fname=None,
 ):
@@ -471,67 +493,106 @@ def plot_beads_after_correction(
         observations = observations[reorder]
 
     NBEADS, NCHAN = peaks.shape
-    fig, axes = plt.subplots(1, NCHAN, figsize=(2.2 * NCHAN, 12))
+    fig, axes = plt.subplots(1, NCHAN, figsize=(1.3 * NCHAN, 9))
     tdata = jnp.array([t(o) for t, o in zip(transform, observations.T)]).T
     tpeaks = jnp.array([t(p) for t, p in zip(transform, peaks.T)]).T
     for c in range(NCHAN):
         ax = axes[c]
-        error = np.average(np.abs(tpeaks[1:, c] - calib[1:, c]))
-        # add beads as horizontal lines
-        for b in range(0, NBEADS):
-            alpha = 0.7
-            ax.axhline(tpeaks[b, c], color='k', lw=1, xmin=0, xmax=0.5)
-            ax.text(
-                -0.07 - (0.05 * b),
-                tpeaks[b, c] + 0.01,
-                f'{b}',
-                fontsize=8,
-                color='k',
-                horizontalalignment='center',
-                verticalalignment='center',
-            )
-            ax.axhline(calib[b, c], alpha=alpha, color='k', lw=1, dashes=(3, 3), xmin=0.5, xmax=1)
-            ax.text(
-                0.45,
-                calib[b, c] + 0.01,
-                f'{b}',
-                fontsize=8,
-                color='k',
-                alpha=alpha,
-                horizontalalignment='center',
-                verticalalignment='center',
-            )
-
-        plot_fluo_distribution(ax, tdata[:, c])
         ax.set_title(f'{color_channels[c]} \n(to {channel_to_unit[color_channels[c]]})', pad=40)
-        ax.text(
-            0.05,
-            1.15,
-            f'TARGET',
-            fontsize=8,
-            color='#999999',
-            horizontalalignment='left',
-            verticalalignment='center',
-        )
-        ax.text(
-            -0.05,
-            1.15,
-            f'REAL',
-            fontsize=8,
-            color='#999999',
-            horizontalalignment='right',
-            verticalalignment='center',
-        )
-        cmap = cm.get_cmap('RdYlGn_r')
-        color = cmap(error / 0.02)
-        ax.text(
-            0,
-            0.05,
-            f'distance: {error:.5f}',
-            fontsize=9,
-            color=color,
-            horizontalalignment='center',
-        )
+        ym, yM = 0.3, 1.4
+        ax.set_ylim(ym, yM)
+        ax.set_yticks([])
+        ax.set_xlim(-0.5, 0.5)
+        remove_axis_and_spines(ax)
+        has_nans = np.mean(np.isnan(tdata[:, c])) > 0.5
+        if has_nans:
+            # could not calibrate this channel
+            ax.axhspan(0, yM, color='k', alpha=0.05)
+            ax.plot([-0.5, 0.5], [ym, yM], color='k', alpha=0.5, lw=0.5, dashes=(3, 3))
+            ax.plot([-0.5, 0.5], [yM, ym], color='k', alpha=0.5, lw=0.5, dashes=(3, 3))
+            for yt in [0.2, 0.8]:
+                ax.text(
+                    0,
+                    yt * (ym + yM),
+                    'Channel\ncould not\nbe calibrated',
+                    fontsize=8,
+                    color='#999999',
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                )
+
+        else:
+            peak_min, peak_max = np.min(tpeaks[:, c]) * 0.99, np.max(tpeaks[:, c]) * 1.01
+            print(f'Channel = {color_channels[c]}')
+            error = np.where(
+                (calib[1:, c] >= peak_min) & (calib[1:, c] <= peak_max),
+                np.abs(tpeaks[1:, c] - calib[1:, c]),
+                np.nan,
+            )
+            # then compute the mean where it's not nan
+            avg_dist_btwn_peaks = np.nanmean(np.diff(calib[:, c]))
+            error = np.nanmean(error) / avg_dist_btwn_peaks
+            # add beads as horizontal lines
+            for b in range(0, NBEADS):
+                alpha = 0.7
+                ax.axhline(tpeaks[b, c], color='k', lw=1, xmin=0, xmax=0.5)
+                ax.text(
+                    -0.07 - (0.05 * b),
+                    tpeaks[b, c] + 0.01,
+                    f'{b}',
+                    fontsize=8,
+                    color='k',
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                )
+                color = 'k'
+                if calib[b, c] <= peak_min or calib[b, c] >= peak_max:
+                    color = 'r'
+                    alpha = 0.35
+                ax.axhline(
+                    calib[b, c], alpha=alpha, color=color, lw=1, dashes=(3, 3), xmin=0.5, xmax=1
+                )
+                ax.text(
+                    0.45,
+                    calib[b, c] + 0.01,
+                    f'{b}',
+                    fontsize=8,
+                    color=color,
+                    alpha=alpha,
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                )
+
+            plot_fluo_distribution(ax, tdata[:, c])
+            ax.text(
+                0.05,
+                1.4,
+                f'TARGET',
+                fontsize=8,
+                color='#999999',
+                horizontalalignment='left',
+                verticalalignment='center',
+            )
+            ax.text(
+                -0.05,
+                1.4,
+                f'REAL',
+                fontsize=8,
+                color='#999999',
+                horizontalalignment='right',
+                verticalalignment='center',
+            )
+            precision = np.clip(1.0 - error, 0, 1)
+            cmap = cm.get_cmap('RdYlGn')
+            color = cmap(precision)
+            ax.text(
+                0,
+                0.2,
+                f'quality: {100.0*precision:.1f}%',
+                fontsize=9,
+                color=color,
+                horizontalalignment='center',
+            )
 
     if title is not None:
         fig.suptitle(title)
@@ -663,19 +724,23 @@ def affine_gd(Y, ref_channel, num_iter=1000, learning_rate=0.1, max_N=500000, ve
 from tqdm import tqdm
 
 
-from scipy.interpolate import LSQUnivariateSpline
+from scipy.interpolate import LSQUnivariateSpline, interp1d
 
-DEFAULT_CMAP_Q = np.array([0.7, 0.8])  # where to put spline knots
-DEFAULT_CLAMP_Q = np.array([0.0001, 0.999])  # where to clamp values
+DEFAULT_CMAP_Q = np.array([0.6, 0.8])  # where to put spline knots
+DEFAULT_CLAMP_Q = np.array([0.0001, 0.9999])  # where to clamp values
 
 
-def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q):
+def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q, Qlin=0.75):
     X, Y = X * CF, Y * CF
     x_order = np.argsort(X, axis=0)
     Xx, Yx = np.take_along_axis(X, x_order, axis=0), Y[x_order]
     w = 0.25 * np.ones_like(Y)
     xknots = np.linspace(np.quantile(X, Q[0], axis=0), np.quantile(X, Q[1], axis=0), n_knots).T
+    x_linear_transition = np.quantile(
+        X, Qlin, axis=0
+    )  # switch to linear extrapolation at this point
     splines = []
+
     for c in range(X.shape[1]):
         try:
             spline = LSQUnivariateSpline(Xx[:, c], Yx[:, c], k=spline_order, t=xknots[c], w=w)
@@ -685,24 +750,40 @@ def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q):
             logging.warning(msg)
             splines.append(lambda x: x)
 
+    def linear_extrapolation(x, spline, x_end, y_end):
+        slope = spline.derivative()(x_end)
+        return y_end + slope * (x - x_end)
 
-    y_order = np.argsort(Y, axis=0)
-    Xy, Yy = X[y_order], Y[y_order]
-    yknots = np.linspace(
-        np.quantile(Yy, Q[0], axis=0), np.quantile(Yy, Q[-1], axis=0), n_knots, endpoint=True
+    def combined_spline(x, spline, x_end, y_end):
+        return np.where(x > x_end, linear_extrapolation(x, spline, x_end, y_end), spline(x))
+
+    y_transition = np.array(
+        [spline(x_trans) for spline, x_trans in zip(splines, x_linear_transition)]
+    )
+    transform = lambda X: np.array(
+        [
+            combined_spline(x * CF, s, x_trans, y_trans) / CF
+            for s, x, x_trans, y_trans in zip(splines, X.T, x_linear_transition, y_transition)
+        ]
     ).T
-    inv_splines = []
-    for c in range(X.shape[1]):
-        try:
-            spline = LSQUnivariateSpline(Yy, Xy[:, c], k=spline_order, t=yknots, w=w)
-            inv_splines.append(spline)
-        except:
-            msg = f'failed to fit spline for channel {c}, with Y = {Yy}'
-            logging.warning(msg)
-            inv_splines.append(lambda x: x)
 
-    transform = lambda X: np.array([s(x * CF) / CF for s, x in zip(splines, X.T)]).T
-    inv_transform = lambda Y: np.array([s(y * CF) / CF for s, y in zip(inv_splines, Y.T)]).T
+    # TODO
+    # y_order = np.argsort(Y, axis=0)
+    # Xy, Yy = X[y_order], Y[y_order]
+    # yknots = np.linspace(
+    # np.quantile(Yy, Q[0], axis=0), np.quantile(Yy, Q[-1], axis=0), n_knots, endpoint=True
+    # ).T
+    # inv_splines = []
+    # for c in range(X.shape[1]):
+    # try:
+    # spline = LSQUnivariateSpline(Yy, Xy[:, c], k=spline_order, t=yknots, w=w)
+    # inv_splines.append(spline)
+    # except:
+    # msg = f'failed to fit spline for channel {c}, with Y = {Yy}'
+    # logging.warning(msg)
+    # inv_splines.append(lambda x: x)
+
+    inv_transform = lambda Y: None
 
     return transform, inv_transform
 
@@ -710,6 +791,7 @@ def cmap_spline(X, Y, n_knots=1, spline_order=3, CF=100, Q=DEFAULT_CMAP_Q):
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 ### {{{                     --     calibration class     --
+
 
 class Calibration:
     """
@@ -721,7 +803,7 @@ class Calibration:
 
     def __init__(
         self,
-        color_controls_files: Dict[Tuple[str], str],
+        color_controls: Dict[Tuple[str], str],
         beads_file: str,
         reference_protein: str = 'mkate',
         reference_channel: str = 'PE_TEXAS_RED',
@@ -735,9 +817,9 @@ class Calibration:
         """
         Parameters
         ----------
-        color_controls_files : dict[tuple[str], str] - dictionary {control protein : path to fcs or csv)
+        color_controls : dict[tuple[str], str] - dictionary {control protein : path to fcs or csv, or dataframe}
             e.g. {'eYFP': 'path/to/eyfp-control.fcs',
-                  'eBFP': 'path/to/ebfp-control.fcs',
+                  'eBFP': eBFPdataframe,
                   'all OR allcolor OR allcolors OR full': 'path/to/allcolor-control.fcs'
                   'blank OR empty OR inert OR cntl ': 'path/to/allcolor-control.fcs' }
 
@@ -759,8 +841,8 @@ class Calibration:
 
         random_seed : int - random seed for any resampling that might be done
 
-        use_channels : list[str] - list of channels to use when computing protein quantity 
-                        from channel values (aka "bleedthrough correction"). 
+        use_channels : list[str] - list of channels to use when computing protein quantity
+                        from channel values (aka "bleedthrough correction").
                         None means all available channels
 
         max_value : int - maximum value of the fluorescence values, used to detect saturation
@@ -768,7 +850,7 @@ class Calibration:
         offset : int - offset to add to the fluorescence values to avoid negative values
 
         """
-        self.color_controls_files = color_controls_files
+        self.color_controls = color_controls
         self.beads_file = beads_file
         self.reference_protein = escape(reference_protein)
         self.reference_channel = escape(reference_channel)
@@ -784,7 +866,7 @@ class Calibration:
 
         self.controls = {
             astuple(escape(k)): load_to_df(v, self.__channel_order)
-            for k, v in color_controls_files.items()
+            for k, v in color_controls.items()
         }
 
         self.__beads_channel_order = sorted(list(self.channel_to_unit.keys()))
@@ -903,7 +985,6 @@ class Calibration:
         self.__fitted = True
         print('Done fitting in {:.2f} seconds'.format(time.time() - t0))
 
-
     def apply_to_array(self, Y):
 
         assert self.__fitted, 'You must fit the calibration first'
@@ -929,13 +1010,13 @@ class Calibration:
 
         return final_X, bleedthrough_X[to_keep] - self.__offset, to_keep
 
-    def apply(self, df, preserve_columns=False, include_arbitraty_units=False, verbose=False):
+    def apply(self, df, preserve_columns=False, include_arbitrary_units=False, verbose=False):
         """
         Apply the calibration to a dataframe of values.
         Options:
         - preserve_columns: if True, the columns of the dataframe are preserved, and the calibrated
         values are appended to the dataframe. Otherwise, the dataframe is replaced by the calibrated
-        values.
+        values. If a list of columns is provided, only these columns are preserved.
         - include_arbitraty_units: if True, the calibrated values are also returned in original arbitrary units
         after bleedthrough correction. Otherwise, the calibrated values are only returned in MEF units.
         """
@@ -943,22 +1024,34 @@ class Calibration:
         odf = df.copy()
         odf.columns = escape(list(odf.columns))
         odf = odf[self.__channel_order]
-        X, au_X, to_keep = self.apply_to_array(odf.values)
+        X, au_X, to_keep = self.apply_to_array(odf.values) # to_keep is a boolean mask for the rows
         assert X.shape[1] == len(self.__fluo_proteins)
         assert X.shape == au_X.shape, f'X.shape={X.shape}, au_X.shape={au_X.shape}'
         assert len(to_keep) == len(df)
 
+        # xdf is the dataframe with calibrated values
         xdf = pd.DataFrame(X, columns=self.__fluo_proteins)
-        if include_arbitraty_units:
+        if include_arbitrary_units:
             # we append au_X, with column names of fluo_proteins with _AU appended
             au_xdf = pd.DataFrame(au_X, columns=[p + '_AU' for p in self.__fluo_proteins])
             xdf = pd.concat([xdf, au_xdf], axis=1)
 
         if preserve_columns:
             to_keep_df = df[to_keep].reset_index(drop=True)
+            if isinstance(preserve_columns, list):
+                to_keep_df = to_keep_df[preserve_columns]
             xdf = pd.concat([to_keep_df, xdf], axis=1)
+
         return xdf
 
+    def apply_to_cytoflow_xp(self, xp, **kwargs):
+        calibrated = self.apply(xp.data, preserve_columns=xp.channels, **kwargs)
+        xp.data.loc[:, xp.channels] = calibrated[xp.channels]
+        xp.data = xp.data.loc[calibrated.index] # remove rows that were filtered out
+        for col in calibrated.columns:
+            if col not in xp.channels:
+                xp.add_channel(col, calibrated[col])
+        return xp
 
     def plot_beads_diagnostics(self):
         if not self.__fitted:
@@ -981,7 +1074,7 @@ class Calibration:
             self.channel_to_unit,
             title="""Beads-based MEF calibration
             right side shows beads intensities in their respective MEF units
-            left side shows the real beads data after calibration\n\n"""
+            left side shows the real beads data after calibration\n\n""",
         )
         plt.show()
 
@@ -989,21 +1082,34 @@ class Calibration:
         if not self.__fitted:
             raise ValueError('You must fit the calibration first')
         fig, ax = plt.subplots()
-        im = ax.imshow(self.__bleedthrough_matrix, cmap='viridis')
+        im = ax.imshow(self.__bleedthrough_matrix, cmap='Greys')
         ax.set_xticks(range(len(self.__channel_order)))
         ax.set_xticklabels(self.__channel_order)
         ax.set_yticks(range(len(self.__fluo_proteins)))
         ax.set_yticklabels(self.__fluo_proteins)
         ax.set_xlabel('Channels')
         ax.set_ylabel('Proteins')
+        # no grid lines
+        ax.grid(False)
+        # write values in the center of each square
+        for i in range(len(self.__fluo_proteins)):
+            for j in range(len(self.__channel_order)):
+                color = 'w' if self.__bleedthrough_matrix[i, j] > 0.5 else 'k'
+                text = ax.text(
+                    j,
+                    i,
+                    '{:.3f}'.format(self.__bleedthrough_matrix[i, j]),
+                    ha="center",
+                    va="center",
+                    color=color,
+                )
         fig.colorbar(im, ax=ax)
         plt.show()
 
-
-    def plot_color_mapping_diagnostics(self):
+    def plot_color_mapping_diagnostics(self, scatter_size=20, scatter_alpha=0.05):
         if not self.__fitted:
             raise ValueError('You must fit the calibration first')
-        fig, ax = plt.subplots(1, 1)
+        fig, ax = plt.subplots(1, 1, figsize=(5, 5))
         # plot transform
         NP = len(self.__fluo_proteins)
         all_masks = self.__controls_masks.sum(axis=1) > 1
@@ -1013,22 +1119,49 @@ class Calibration:
         logX = logtransform(X, self.__log_scale_factor, 0)
         logX = logX[jnp.all(logX > self.clamp_values[0], axis=1)]
         logX = logX[jnp.all(logX < self.clamp_values[1], axis=1)]
-        print(f'clamp values: {self.clamp_values}')
-        target = logX[:, self.__fluo_proteins.index(self.reference_protein)]
+        refid = self.__fluo_proteins.index(self.reference_protein)
+        target = logX[:, refid]
+
+        scatter_x = []
+        scatter_y = []
+        scatter_color = []
+
         for i in range(NP):
-            xx = np.linspace(self.clamp_values[0,i], self.clamp_values[1,i], 200)
-            print(f'xx range: {xx.min()} {xx.max()}')
-            yy = self.cmap_transform(np.tile(xx, (NP,1)).T)[:, i]
-            print(f'shapes: {xx.shape} {yy.shape}')
-            ax.scatter(logX[:, i], target, s=5, alpha=0.05, marker='.', linewidths=0)
-            ax.plot(xx, yy, alpha=1, lw=2.5, color='w')
-            ax.plot(xx, yy, label=self.__fluo_proteins[i], alpha=1, lw=1, color='C%d' % i)
-        yrange = self.clamp_values.min()*0.9, self.clamp_values.max()*1.05
+            fpname = self.__fluo_proteins[i]
+            color = get_bio_color(fpname)
+            xx = np.linspace(self.clamp_values[0, i], self.clamp_values[1, i], 200)
+            yy = self.cmap_transform(np.tile(xx, (NP, 1)).T)[:, i]
+            scatter_x.append(logX[:, i].flatten())
+            scatter_y.append(target.flatten())
+            scatter_color.append([color] * len(logX))
+            ax.plot(xx, yy, alpha=1, lw=5, color='w')
+            if i == refid:
+                fpname += ' (reference)'
+            ax.plot(xx, yy, label=fpname, alpha=1, lw=1.5, color=color, zorder=10)
+
+        scatter_x = np.concatenate(scatter_x)
+        scatter_y = np.concatenate(scatter_y)
+        scatter_color = np.concatenate(scatter_color)
+        order = np.random.permutation(len(scatter_x))
+
+        ax.scatter(
+            scatter_x[order],
+            scatter_y[order],
+            c=scatter_color[order],
+            s=scatter_size,
+            alpha=scatter_alpha,
+            lw=0,
+            zorder=0,
+        )
+
+        yrange = self.clamp_values.min() * 0.9, self.clamp_values.max() * 1.05
         ax.set_ylim(yrange)
         ax.set_xlim(yrange)
         ax.legend()
         ax.set_xlabel('source')
         ax.set_ylabel('target')
+        # no grid, grey background
+        ax.grid(False)
         ax.set_title(f'Color mapping to {self.reference_protein}')
         plt.show()
 
