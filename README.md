@@ -14,24 +14,25 @@ If you don't have a python development environment, I'd suggest the following pr
 
 1. I recommend installing miniconda for windows: [Latest miniconda for windows 64 bits][https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe]
 2. Open the Anaconda Prompt (from the start menu)
-3. Create a new environment with python 3.10: `conda create -n <name> python=3.10` where <name> is any name you want (such as "flow")
-4. Activate the environment: `conda activate <name>`
-5. Install jupyterlab and git with `conda install jupyterlab git`
-8. Start jupyterlab with `jupyter lab` and open a terminal from the jupyterlab interface
-9. Clone and install calibry in the directory of your choice, from the jupyterlab terminal:
+3. Create a new environment with python 3.8, as it's a version  that works for both cytoflow and calibry (calibry will work with any version >= 3.8) :
+   `conda create -n <name> python=3.8` where <name> is any name you want to give your environment (such as "flow")
+5. Activate the environment: `conda activate <name>`
+6. Install jupyterlab and git with `conda install jupyterlab git`
+7. Start jupyterlab with `jupyter lab` and open a terminal from the jupyterlab interface
+8. Clone and install calibry in the directory of your choice, from the jupyterlab terminal:
 	```bash
 	git clone <calibry_repository_url>`
 	cd calibry
 	pip install jax[cpu] # this is needed to install all the jax dependencies
 	pip install -e .
 	```
-10. Clone and install the Calibry repository:
+9. Clone and install the Calibry repository:
 	```bash
 	git clone <calibry_repository_url>`
 	cd calibry
 	pip install -e .
 	```
-11. Windows require specific versions of certain packages so we'll install the dependencies manually:
+10. Windows require specific versions of certain packages so we'll install the dependencies manually:
 	```bash
 	pip install "jax[cpu]===0.3.25" -f https://whls.blob.core.windows.net/unstable/index.html --use-deprecated legacy-resolver
 	pip install flax==0.6.3 ott-jax==0.3.1 chex==0.1.5 optax==0.1.4 flax==0.6.3 orbax==0.0.15 --no-deps
