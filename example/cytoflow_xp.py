@@ -3,10 +3,6 @@ import pandas as pd
 from cytoflow import ImportOp, Tube, PolygonOp, ScatterplotView
 from pathlib import Path
 
-# increase matplotlib default figure size and resolution
-import matplotlib.pyplot as plt
-plt.rcParams['figure.figsize'] = [8, 8]
-plt.rcParams['figure.dpi'] = 100
 
 
 data_path = Path('./data').resolve()
