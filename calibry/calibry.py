@@ -1574,15 +1574,16 @@ def fluo_scatter(
 def scatter_matrix(
     Y,
     dim_names,
-    subsample=20000,
+    subsample=50000,
     log=False,
     plot_size=4,
     dpi=200,
     color='k',
     s=0.1,
-    alpha=0.1,
-    lims=None,
+    alpha=0.2,
     c=None,
+    xlims=[-1e4, 1e4],
+    ylims=[-1e2, 1e5],
     **kwargs,
 ):
     n_channels = Y.shape[1]
@@ -1608,11 +1609,10 @@ def scatter_matrix(
                 ax.set_ylabel(dim_names[row])
 
             if log:
-                ax.set_xscale('symlog')
-                ax.set_yscale('symlog')
-            if lims is not None:
-                ax.set_xlim(lims)
-                ax.set_ylim(lims)
+                ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
+                ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
+            # ax.set_xlim(xlims)
+            # ax.set_ylim(ylims)
 
     return fig, axes
 
@@ -1626,6 +1626,7 @@ def unmixing_plot(
     ylims=[-1e2, 1e6],
     **_,
 ):
+    # adding the 'all' to protein names:
     NPROT = len(protein_names)
     FSIZE = 5
     fig, axes = plt.subplots(NPROT, NPROT, figsize=(NPROT * FSIZE, NPROT * FSIZE))
