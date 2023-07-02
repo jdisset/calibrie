@@ -1,0 +1,63 @@
+site_name: "Calibry"
+repo_url: https://github.com/jdisset/calibry
+
+theme:
+  name: "material"
+  logo: assets/calibrylogo.png
+  palette:
+    primary: white
+  features:
+    - navigation.instant
+    - navigation.expand
+    - navigation.path
+    - navigation.indexes
+    - navigation.top
+
+watch:
+  - calibry/
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - attr_list
+  - md_in_html
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            docstring_style: google
+            docstring_section_style: list
+            members_order: source
+            merge_init_into_class: true
+            show_bases: false
+            show_if_no_docstring: false
+            show_root_full_path: true
+            show_root_heading: true
+            show_source: false
+            show_submodules: false
+            group_by_category: true
+            show_root_full_path: true
+  - macros
+
+extra:
+  task_disclaimer: "!!! info \"This module contains a pipeline task. Pipeline tasks are not meant to be used by themselves.\""
+
+
+nav:
+  - Overview: index.md
+  - Modules & Tasks:
+      - Linear Unmixing: linearcomp.md
+      - Non Linear Least-Square Unmixing: nonlinearcomp.md
+  - Default pipelines: pipeline.md
