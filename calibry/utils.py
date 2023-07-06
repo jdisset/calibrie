@@ -315,12 +315,42 @@ def tree_unstack(tree):
 ### {{{                     --     stacked polynomials fit     --
 
 
-def gaussian_kernel(x, mean, std):
-    return jnp.exp(-((x - mean) ** 2) / (2 * std**2))
+def gaussian_kernel(x, mean, std, scaler=1e12):
+    return scaler * jnp.exp(-((x - mean) ** 2) / (2 * std**2))
+
+
+def square_kernel(x, mean, std, scaler=1e12):
+    return scaler * (jnp.abs(x - mean) < std)
+
+
+@partial(jit, static_argnames=('degree', 'N'))
+def fit_stacked_poly_coeffs_top_n(x, y, w, mticks, stds, degree=1, N=1000):
+    weights = vmap(square_kernel, in_axes=(None, 0, 0))(x, mticks, stds)
+    weights = weights * w[None, :]
+
+    def pfit(x, y, w):
+        return jnp.polyfit(x, y, deg=degree, w=w)
+
+    def get_top_n_idx(w):
+        return jnp.argpartition(w, -N)[-N:]
+
+    topn_idx = vmap(get_top_n_idx)(weights)
+
+    def take0(x, idx):
+        return x[idx]
+
+    topn_x = vmap(take0, in_axes=(None, 0))(x, topn_idx)
+    topn_y = vmap(take0, in_axes=(None, 0))(y, topn_idx)
+    topn_weights = vmap(take0, in_axes=(0, 0))(weights, topn_idx)
+
+    coeffs = vmap(pfit)(topn_x, topn_y, topn_weights)
+
+    return coeffs
 
 
 @partial(jit, static_argnames=('degree'))
 def fit_stacked_poly_coeffs(x, y, w, mticks, stds, degree=1):
+    # weights = vmap(square_kernel, in_axes=(None, 0, 0))(x, mticks, stds)
     weights = vmap(gaussian_kernel, in_axes=(None, 0, 0))(x, mticks, stds)
     weights = weights * w[None, :]
 
@@ -328,6 +358,7 @@ def fit_stacked_poly_coeffs(x, y, w, mticks, stds, degree=1):
         return jnp.polyfit(x, y, deg=degree, w=w)
 
     coeffs = vmap(pfit, in_axes=(None, None, 0))(x, y, weights)
+
     return coeffs
 
 
@@ -339,7 +370,7 @@ def evaluate_stacked_poly(x, params):
 
     # when to the left of the first tick or to the right of the last tick,
     # extrapolate the weights to the nearest tick:
-    EPS = 1e-6
+    EPS = 1e-9
 
     eval_weights = eval_weights.at[0].set(
         jnp.where(x < mticks[0], jnp.clip(eval_weights[0], EPS, None), eval_weights[0])
@@ -351,19 +382,35 @@ def evaluate_stacked_poly(x, params):
     return jnp.average(evals, weights=eval_weights, axis=0)
 
 
-STACKED_POLY_HEURISTIC_FIT_STD = lambda spacing: spacing**0.75
-STACKED_POLY_HEURISTIC_EVAL_STD = lambda spacing: 1.4 * spacing**0.80
+# STACKED_POLY_HEURISTIC_FIT_STD = lambda spacing: spacing**0.75
+# STACKED_POLY_HEURISTIC_EVAL_STD = lambda spacing: 1.4 * spacing**0.80
+
+STACKED_POLY_SCALING = 1e2
+
+STACKED_POLY_HEURISTIC_FIT_STD = lambda spacing: spacing
+STACKED_POLY_HEURISTIC_EVAL_STD = lambda spacing: spacing
 
 
 @partial(jit, static_argnames=('resolution', 'degree'))
 def fit_stacked_poly_uniform_spacing(x, y, w, xmin, xmax, resolution, degree=1):
+    scale_ratio = STACKED_POLY_SCALING / (xmax - xmin)
     spacing = (xmax - xmin) / (resolution)
+    scaled_spacing = spacing * scale_ratio
     mticks = jnp.linspace(xmin, xmax, resolution, endpoint=False) + spacing / 2
-    fit_stds = jnp.ones_like(mticks) * STACKED_POLY_HEURISTIC_FIT_STD(spacing)
-    eval_stds = jnp.ones_like(mticks) * STACKED_POLY_HEURISTIC_EVAL_STD(spacing)
+    fit_stds = jnp.ones_like(mticks) * (
+        STACKED_POLY_HEURISTIC_FIT_STD(scaled_spacing) / scale_ratio
+    )
+    eval_stds = jnp.ones_like(mticks) * (
+        STACKED_POLY_HEURISTIC_EVAL_STD(scaled_spacing) / scale_ratio
+    )
     coeffs = fit_stacked_poly_coeffs(x, y, w, mticks, fit_stds, degree=degree)
-
     return (coeffs, mticks, eval_stds)
+
+
+@partial(jit, static_argnames=('resolution', 'degree'))
+def fit_stacked_poly(x, y, w, resolution, degree=1, qmin=0.0001, qmax=0.9999):
+    xmin, xmax = jnp.quantile(x, jnp.array([qmin, qmax]))
+    return fit_stacked_poly_uniform_spacing(x, y, w, xmin, xmax, resolution, degree=degree)
 
 
 @partial(jit, static_argnames=('degree',))

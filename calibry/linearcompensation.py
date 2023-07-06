@@ -385,7 +385,7 @@ def compute_spectral_signature_WLR(
     padded_W = np.array([np.pad(w, ((0, pad_to - len(w)), (0, 0))) for w in all_W])
 
     assert (
-        padded_Y.shape == padded_W.shape == (len(protein_names), largest_count, len(channel_names))
+        padded_Y.shape == padded_W.shape == (len(protein_names), pad_to, len(channel_names))
     )
 
     # now we can compute the weighted linear regression for each channel
