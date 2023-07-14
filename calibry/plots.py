@@ -507,8 +507,10 @@ def unmixing_plot(
             ax.set_xlabel(f'{prot_name}')
             ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
             ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
-            ax.set_xlim(xlims)
-            ax.set_ylim(ylims)
+            if xlims is not None:
+                ax.set_xlim(xlims)
+            if ylims is not None:
+                ax.set_ylim(ylims)
     fig.tight_layout()
     return fig, axes
 

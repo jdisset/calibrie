@@ -41,11 +41,13 @@ abundances = linpipe.apply(observations)
 
 """
 
+from jaxopt import GaussNewton
 from .pipeline import Task
 import jax
-from jax import jit
+from jax import jit, vmap
 import jax.numpy as jnp
 import numpy as np
+import time
 
 from . import plots, utils
 import matplotlib.pyplot as plt
@@ -70,10 +72,23 @@ class LinearCompensation(Task):
 
     """
 
-    def __init__(self, mode='WLR', weighted=True, **kwargs):
+    def __init__(
+        self,
+        mode='WLR',
+        weighted=True,
+        use_matrix=None,
+        use_variance_model=False,
+        variance_model_resolution=12,
+        variance_model_degree=3,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.mode = mode
         self.weighted = weighted
+        self.use_matrix = use_matrix
+        self.use_variance_model = use_variance_model
+        self.variance_model_resolution = variance_model_resolution
+        self.variance_model_degree = variance_model_degree
 
     def compute_linear_spectral_signature(self, controls_values, controls_masks):
         single_masks = controls_masks.sum(axis=1) == 1
@@ -94,11 +109,16 @@ class LinearCompensation(Task):
     ):
         self.autofluorescence = utils.estimate_autofluorescence(controls_values, controls_masks)
         self.saturation_thresholds = saturation_thresholds
-        if self.mode == 'ALS':
+        Y = controls_values
+
+        if self.use_matrix is not None:
+            self.spillover_matrix = self.use_matrix
+            self.log.debug(f"Using provided spillover matrix:\n{self.spillover_matrix}")
+
+        elif self.mode == 'ALS':
             self.compute_linear_spectral_signature(controls_values, controls_masks)
 
         elif self.mode == 'WLR':
-            Y = controls_values
             W = compute_saturation_mask(controls_values, channel_names, saturation_thresholds)
             W = W * 1.0 / (np.maximum(Y, 100))
             self.spillover_matrix = compute_spectral_signature_WLR(
@@ -111,39 +131,25 @@ class LinearCompensation(Task):
                 logger=self.log,
             )
             self.spillover_matrix = np.clip(self.spillover_matrix, 0, None)
-
-        elif self.mode == 'WLR2':
-
-            from sklearn.decomposition import PCA
-
-            # first let's isolate all the available single controls
-            one_hot = lambda x, n: np.eye(n)[x]
-            single_controls = one_hot(np.arange(len(protein_names)), len(protein_names)).astype(
-                bool
-            )
-            counts = np.array(
-                [np.all(controls_masks == sc, axis=1).sum() for sc in single_controls]
-            )
-            # randomly reorder Y:
-            NC = len(channel_names)
-            pca = PCA(n_components=NC)
-            pca.fit(controls_values)
-            K = pca.components_
-            Y = np.dot(controls_values, K.T)
-            W = np.ones_like(Y)
-            self.spillover_matrix = compute_spectral_signature_WLR(
-                Y,
-                controls_masks,
-                W,
-                protein_names,
-                channel_names,
-                reference_channels,
-                logger=self.log,
-            )
-            # self.spillover_matrix = np.clip(self.spillover_matrix, 0, None)
-
         else:
-            raise ValueError(f"Unknown solver mode {mode}")
+            raise ValueError(f"Unknown solver mode {self.mode}")
+
+        if self.use_variance_model:
+            EPSILON = 1e-6
+            per_channel_saturation_thresholds = np.quantile(
+                controls_values, np.array([0.0001, 0.9999]), axis=0
+            ).T + jnp.array([EPSILON, -EPSILON])
+
+            self.variance_params = make_variance_model(
+                controls_values,
+                controls_masks,
+                protein_names,
+                self.spillover_matrix,
+                per_channel_saturation_thresholds,
+                self.variance_model_resolution,
+                self.variance_model_degree,
+                transform=utils.logtransform,
+            )
 
         return {
             'autofluorescence': self.autofluorescence,
@@ -161,29 +167,66 @@ class LinearCompensation(Task):
         ), "Mismatch between observations and channels"
 
         if self.weighted:
+            # max_obs = 100000
+            # # resample  to max_obs points
+            # selected = np.random.choice(
+                # observations_raw.shape[0],
+                # size=min(max_obs, observations_raw.shape[0]),
+                # replace=False,
+            # )
+            # observations_raw = observations_raw[selected]
+
             W = compute_saturation_mask(observations_raw, channel_names, self.saturation_thresholds)
             Y = observations_raw - self.autofluorescence
             W = W * 1.0 / (np.maximum(Y, 100))
 
             def solve_one(y, w):
                 y_weighted = y * w
-
-                # TODO: weight by average error to linreg
-                # compute avg error at y for each row of S
-                # maybe fit a function that estimates the error and use it as weight
-                # WM =
-
                 S_weighted = self.spillover_matrix * w[None, :]
-
                 x, residuals, rank, s = jnp.linalg.lstsq(S_weighted.T, y_weighted, rcond=None)
                 return x
 
-            solve = jit(jax.vmap(solve_one))
+            if self.use_variance_model:
+
+                def compute_weight_mat(y, w):
+                    V = vmap(vmap(utils.evaluate_stacked_poly), in_axes=(None, 0))(
+                        utils.logtransform(y), self.variance_params
+                    )
+                    M = 1.0 / jnp.clip(V, 50, None)
+                    return M
+
+                WM = vmap(compute_weight_mat)(Y, W)
+                # WMmean = WM.min(axis=1)
+                print(f'shape of WM: {WM.shape}')
+                print(f'shape of W: {W.shape}')
+                # W = W * WMmean
+                # WM = WM / WM.max(axis=0)
+                # WM = jnp.ones_like(WM)
+
+            def residual_fun(x, y, W):
+                yhat = x @ (self.spillover_matrix)
+                residuals = (y - yhat) * jnp.min(W, axis=0)
+                # weighted_terms = x[:, None] * self.spillover_matrix
+                # wsum = weighted_terms.sum(axis=0)
+                # residuals = (y - wsum) * jnp.mean(W, axis=0)
+                return residuals
+
+            gn = GaussNewton(residual_fun=residual_fun)
+
+            @jax.jit
+            def opt_run(x, obs, WM):
+                return vmap(gn.run)(x, obs, WM).params
+
+            # X = opt_run(jnp.zeros((Y.shape[0], self.spillover_matrix.shape[0])), Y, WM)
+
+            solve = jit(vmap(solve_one))
             X = solve(Y, W)
 
         else:
             Y = observations_raw - self.autofluorescence
             X = Y @ jnp.linalg.pinv(self.spillover_matrix)  # apply bleedthrough
+            # or with lstsq:
+            # X, residuals, rank, s = jnp.linalg.lstsq(self.spillover_matrix.T, Y, rcond=None)
 
         self.log.debug(f"Linear unmixing done")
         return {'abundances_AU': X}
@@ -384,9 +427,7 @@ def compute_spectral_signature_WLR(
     padded_Y = np.array([np.pad(y, ((0, pad_to - len(y)), (0, 0))) for y in all_Y])
     padded_W = np.array([np.pad(w, ((0, pad_to - len(w)), (0, 0))) for w in all_W])
 
-    assert (
-        padded_Y.shape == padded_W.shape == (len(protein_names), pad_to, len(channel_names))
-    )
+    assert padded_Y.shape == padded_W.shape == (len(protein_names), pad_to, len(channel_names))
 
     # now we can compute the weighted linear regression for each channel
 
@@ -402,3 +443,73 @@ def compute_spectral_signature_WLR(
     )
 
     return mat
+
+
+def make_variance_model(
+    controls_values,
+    controls_masks,
+    protein_names,
+    spillover_matrix,
+    per_channel_saturation_thresholds,
+    variance_model_resolution,
+    variance_model_degree,
+    transform=lambda x: x,
+    resample_to=20000,
+):
+
+    # first let's isolate all the available single controls
+    one_hot = lambda x, n: np.eye(n)[x]
+    single_controls = one_hot(np.arange(len(protein_names)), len(protein_names)).astype(bool)
+    counts = np.array([np.all(controls_masks == sc, axis=1).sum() for sc in single_controls])
+
+    # reorder and resample
+    order = np.random.permutation(len(controls_values))
+    mincount = min(counts.min(), resample_to)
+    Y = np.array(
+        [
+            controls_values[order][np.all(controls_masks[order] == sc, axis=1)][:mincount]
+            for sc in single_controls
+        ]
+    )
+
+    # normalize each row of the spillover matrix to unit length
+    spill_norms = np.linalg.norm(spillover_matrix, axis=1)
+    spill_units = spillover_matrix / spill_norms[:, None]
+
+    # project each observation on each unit vector
+    proj_dist_to_origin = vmap(jnp.dot)(Y, spill_units)
+    proj_vectors = spill_units[:, None, :] * proj_dist_to_origin[:, :, None]
+
+    tr_variance_vectors = (transform(Y) - transform(proj_vectors)) ** 2
+
+    # now we can fit a model to the variance components
+
+    @jit
+    def fit_variance_models(
+        Y,
+        residual_vectors,
+        per_channel_saturation_thresholds,
+    ):
+        def fit_model(x, v, sat_x):
+            w = (x > sat_x[0]) & (x < sat_x[1])
+            bounds = jnp.quantile(x, np.array([0.001, 0.9999]))
+            return utils.fit_stacked_poly_uniform_spacing(
+                x, v, w, *bounds, variance_model_resolution, variance_model_degree
+            )
+
+        def fit_prot(yprot, prot_residuals):
+            return vmap(fit_model)(yprot.T, prot_residuals.T, per_channel_saturation_thresholds)
+
+        return vmap(fit_prot)(Y, residual_vectors)
+
+    t0 = time.time()
+
+    params = fit_variance_models(
+        transform(Y),
+        tr_variance_vectors,
+        transform(per_channel_saturation_thresholds),
+    )
+
+    print(f"fitting took {time.time() - t0:.2f} seconds")
+
+    return params

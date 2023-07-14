@@ -66,14 +66,15 @@ def load_to_df(data, column_order=None):
     df = df.reset_index(drop=True)
     return df
 
+DEFAULT_LOG_RESCALE = 1e3
+DEFAULT_LOG_OFFSET = 1e3
 
-def logtransform(x, scale, offset=0):
-    x = jnp.clip(x, 1e-9, None)
-    return jnp.log10(x + offset) / scale
+def logtransform(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
+    return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
 
 
-def inverse_logtransform(x, scale, offset=0):
-    return 10 ** (x * scale) - offset
+def inv_logtransform(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
+    return jnp.exp(x / scale + jnp.log(offset)) - offset
 
 
 ### {{{                   --     spline_exp transform     --
@@ -355,7 +356,8 @@ def fit_stacked_poly_coeffs(x, y, w, mticks, stds, degree=1):
     weights = weights * w[None, :]
 
     def pfit(x, y, w):
-        return jnp.polyfit(x, y, deg=degree, w=w)
+        ww = jnp.where(w.sum() > 0, w, jnp.ones_like(w)*1e-12)
+        return jnp.polyfit(x, y, deg=degree, w=ww)
 
     coeffs = vmap(pfit, in_axes=(None, None, 0))(x, y, weights)
 
@@ -391,12 +393,14 @@ STACKED_POLY_HEURISTIC_FIT_STD = lambda spacing: spacing
 STACKED_POLY_HEURISTIC_EVAL_STD = lambda spacing: spacing
 
 
-@partial(jit, static_argnames=('resolution', 'degree'))
-def fit_stacked_poly_uniform_spacing(x, y, w, xmin, xmax, resolution, degree=1):
+@partial(jit, static_argnames=('resolution', 'degree', 'endpoint'))
+def fit_stacked_poly_uniform_spacing(x, y, w, xmin, xmax, resolution, degree=1, endpoint=True):
     scale_ratio = STACKED_POLY_SCALING / (xmax - xmin)
     spacing = (xmax - xmin) / (resolution)
     scaled_spacing = spacing * scale_ratio
-    mticks = jnp.linspace(xmin, xmax, resolution, endpoint=False) + spacing / 2
+    mticks = jnp.linspace(xmin, xmax, resolution, endpoint=endpoint)
+    if not endpoint:
+        mticks = mticks + spacing / 2
     fit_stds = jnp.ones_like(mticks) * (
         STACKED_POLY_HEURISTIC_FIT_STD(scaled_spacing) / scale_ratio
     )
