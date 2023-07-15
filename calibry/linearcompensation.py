@@ -167,18 +167,18 @@ class LinearCompensation(Task):
         ), "Mismatch between observations and channels"
 
         if self.weighted:
-            # max_obs = 100000
-            # # resample  to max_obs points
-            # selected = np.random.choice(
-                # observations_raw.shape[0],
-                # size=min(max_obs, observations_raw.shape[0]),
-                # replace=False,
-            # )
-            # observations_raw = observations_raw[selected]
+
+            max_obs = 100000
+            # resample  to max_obs points
+            selected = np.random.choice(
+                observations_raw.shape[0],
+                size=min(max_obs, observations_raw.shape[0]),
+                replace=False,
+            )
+            observations_raw = observations_raw[selected]
 
             W = compute_saturation_mask(observations_raw, channel_names, self.saturation_thresholds)
             Y = observations_raw - self.autofluorescence
-            W = W * 1.0 / (np.maximum(Y, 100))
 
             def solve_one(y, w):
                 y_weighted = y * w
@@ -186,41 +186,74 @@ class LinearCompensation(Task):
                 x, residuals, rank, s = jnp.linalg.lstsq(S_weighted.T, y_weighted, rcond=None)
                 return x
 
+            solve_lstsq = jit(vmap(solve_one))
+
             if self.use_variance_model:
 
-                def compute_weight_mat(y, w):
+                def compute_variance_at_obs(y):
                     V = vmap(vmap(utils.evaluate_stacked_poly), in_axes=(None, 0))(
                         utils.logtransform(y), self.variance_params
                     )
-                    M = 1.0 / jnp.clip(V, 50, None)
-                    return M
+                    return V
 
-                WM = vmap(compute_weight_mat)(Y, W)
-                # WMmean = WM.min(axis=1)
-                print(f'shape of WM: {WM.shape}')
-                print(f'shape of W: {W.shape}')
-                # W = W * WMmean
-                # WM = WM / WM.max(axis=0)
-                # WM = jnp.ones_like(WM)
+                def compute_variance_mat(x):
+                    y = x[:,None] * jnp.ones_like(self.spillover_matrix)
+                    V = vmap(vmap(utils.evaluate_stacked_poly))(
+                        utils.logtransform(y), self.variance_params
+                    )
+                    return V
 
-            def residual_fun(x, y, W):
-                yhat = x @ (self.spillover_matrix)
-                residuals = (y - yhat) * jnp.min(W, axis=0)
-                # weighted_terms = x[:, None] * self.spillover_matrix
-                # wsum = weighted_terms.sum(axis=0)
-                # residuals = (y - wsum) * jnp.mean(W, axis=0)
+                def compute_weight_mat_from_obs(y):
+                    V = compute_variance_at_obs(y)
+                    return 1 / jnp.clip(V, 1, None)
+
+                WM = vmap(compute_weight_mat_from_obs)(Y)
+                WM_min = jnp.min(WM, axis=1)
+                WM_min = 1.0 / (np.maximum(Y, 50))
+            else:
+                WM_min = 1.0 / (np.maximum(Y, 50))
+
+            # NSAMPLES = 40
+            # def residual_fun(x, y, s, wy, k):
+                # variance = compute_variance_mat(x)
+                # keys = jax.random.split(k, NSAMPLES)
+                # means = x[:,None] * s
+                # xnoise = vmap(jax.random.normal, (0, None))(keys, means.shape)
+                # # xnoise = jnp.zeros((NSAMPLES, means.shape[0], means.shape[1]))
+                # # xmults = means + jax.lax.stop_gradient(jnp.sqrt(jnp.clip(variance, 1e-5, None)) * xnoise)
+                # xmults = means + (jnp.sqrt(jnp.clip(variance, 1e-5, None)) * xnoise)
+                # assert xmults.shape == (NSAMPLES, x.shape[0], y.shape[0])
+                # yhat = jnp.sum(xmults, axis=1)
+                # assert yhat.shape == (NSAMPLES, len(y))
+                # # let's reduce
+                # yhat = jnp.mean(yhat, axis=0)
+                # assert yhat.shape == (len(y),)
+                # residuals = (y - yhat) * wy
+                # return residuals
+
+            def residual_fun(x, y, s, wy, k):
+                # variance = jax.lax.stop_gradient(compute_variance_mat(jnp.abs(x)))
+                variance = jax.lax.stop_gradient(compute_variance_mat(jnp.clip(x,0,None)))
+                yhat = x @ s
+                variance_columns = variance.sum(axis=0)
+                residuals = (y - yhat) * wy / jnp.clip(variance_columns, 10, None)
+                residuals = (y - yhat) * wy / jnp.clip(y, 10, None)
                 return residuals
 
-            gn = GaussNewton(residual_fun=residual_fun)
+            gn = GaussNewton(residual_fun=residual_fun, implicit_diff=False)
+            # gn = GaussNewton(residual_fun=residual_fun)
 
             @jax.jit
-            def opt_run(x, obs, WM):
-                return vmap(gn.run)(x, obs, WM).params
+            def opt_run(x, obs, s, wy, k):
+                return vmap(gn.run, (0,0,None,0,0))(x, obs, s, wy, k).params
 
-            # X = opt_run(jnp.zeros((Y.shape[0], self.spillover_matrix.shape[0])), Y, WM)
+            X = solve_lstsq(Y, W * WM_min)
 
-            solve = jit(vmap(solve_one))
-            X = solve(Y, W)
+            # keys = jax.random.split(jax.random.PRNGKey(0), observations_raw.shape[0])
+            # S = self.spillover_matrix
+            # X = opt_run(jnp.zeros((Y.shape[0], self.spillover_matrix.shape[0])), Y, S, W, keys)
+
+
 
         else:
             Y = observations_raw - self.autofluorescence
@@ -480,7 +513,7 @@ def make_variance_model(
     proj_dist_to_origin = vmap(jnp.dot)(Y, spill_units)
     proj_vectors = spill_units[:, None, :] * proj_dist_to_origin[:, :, None]
 
-    tr_variance_vectors = (transform(Y) - transform(proj_vectors)) ** 2
+    variance_vectors = (Y - proj_vectors) ** 2
 
     # now we can fit a model to the variance components
 
@@ -506,7 +539,7 @@ def make_variance_model(
 
     params = fit_variance_models(
         transform(Y),
-        tr_variance_vectors,
+        variance_vectors,
         transform(per_channel_saturation_thresholds),
     )
 

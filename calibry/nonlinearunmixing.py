@@ -230,14 +230,15 @@ class NonLinearUnmixing(Task):
         return ret
 
 
+
 @partial(jit, static_argnames=('degree', 'max_samples', 'resolution'))
 def channel_functions_stacked_poly(
     Y,  # (n_samples, n_channels)
     reference_channel_id,
     saturation_thresholds,
-    degree=1,
-    max_samples=200000,
-    resolution=3,
+    degree=2,
+    max_samples=40000,
+    resolution=4,
     key=jax.random.PRNGKey(0),
 ):
     sample_ids = jax.random.choice(
@@ -250,10 +251,11 @@ def channel_functions_stacked_poly(
         (Y_s > saturation_thresholds['lower']) & (Y_s < saturation_thresholds['upper'])
     ).astype(np.float32)
 
+
     endpoint = jnp.quantile(Y_s[:, reference_channel_id], 0.999)
     startpoint = Y_s[:, reference_channel_id].min()
 
-    args = vmap(utils.fit_stacked_poly_at_ranges, in_axes=(None, 1, 1, None, None, None, None))(
+    args = vmap(utils.fit_stacked_poly_uniform_spacing, in_axes=(None, 1, 1, None, None, None, None))(
         Y_s[:, reference_channel_id],
         Y_s,
         saturation_weights,
