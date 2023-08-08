@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import scale as mscale
+from matplotlib import scale as mscaleplo
 from matplotlib import transforms as mtransforms
 from matplotlib.ticker import FixedLocator, FuncFormatter
 import matplotlib.ticker as ticker
@@ -76,6 +76,7 @@ def get_bio_color(name, default='k'):
         'ebfp': '#529edb',
         'eyfp': '#fbda73',
         'mkate': '#f75a5a',
+        'mko2': '#f75a5a',
         'neongreen': '#33f397',
         'irfp720': '#97582a',
     }
@@ -243,6 +244,7 @@ class CustomFormatter(ticker.Formatter):
                 return r'${0:.1f}e{1}$'.format(x / 10**E, E)
 
 
+from matplotlib import scale as mscale
 class SplineExponentialScale(mscale.ScaleBase):
     name = 'spline_exp'
 
@@ -416,11 +418,16 @@ def plot_channels_to_reference(
     channel_names,
     protein_names,
     F_mat=None,
+    coefs=None,
     autofluorescence=None,
     figscale=5,
     logscale=False,
     dpi=150,
     data_transform=None,
+    ybound_quantiles=None,
+    max_n_points=50000,
+    disable_reference_plot=True,
+    include_all_ctrl=True,
     **_,
 ):
     NPROT = len(protein_names)
@@ -432,13 +439,16 @@ def plot_channels_to_reference(
     for ctrl_id, ctrl_name in enumerate(protein_names):
         prot_mask = (single_masks) & (controls_masks[:, ctrl_id]).astype(bool)
         Y = controls_values[prot_mask] - autofluorescence
+        if Y.shape[0] > max_n_points:
+            idx = np.random.choice(Y.shape[0], max_n_points, replace=False)
+            Y = Y[idx, :]
         if data_transform is not None:
             Y = data_transform(Y)
         ref_chan = reference_channels[ctrl_id]
         ref_chan_name = channel_names[ref_chan]
         for cid, chan in enumerate(channel_names):
             ax = axes[ctrl_id, cid]
-            if cid == ref_chan:
+            if cid == ref_chan and disable_reference_plot:
                 ax.text(
                     0.5,
                     0.5,
@@ -456,11 +466,19 @@ def plot_channels_to_reference(
                 f = F_mat[ctrl_id][cid]
                 x = np.linspace(*ax.get_xlim(), 500)
                 ax.plot(x, f(x), c='r', lw=1)
+            if coefs is not None:
+                x = np.linspace(*ax.get_xlim(), 5)
+                y = x * coefs[ctrl_id][cid]
+                ax.plot(x, y, c='r', lw=1)
             ax.set_ylabel(f'{chan} (a.u.)')
             ax.set_xlabel(f'{ref_chan_name} (a.u.)')
             if logscale:
                 ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
                 ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
+            if ybound_quantiles is not None:
+                q = np.quantile(Y[:, cid], ybound_quantiles)
+                yrange = q[1] - q[0]
+                ax.set_ylim(q[0] - yrange*0.05, q[1] + yrange*0.1)
     fig.tight_layout()
     return fig, axes
 
@@ -472,6 +490,12 @@ def unmixing_plot(
     xlims=[-1e6, 1e6],
     ylims=[-1e2, 1e6],
     description='',
+    xlinthresh=50,
+    xlinscale=0.4,
+    ylinthresh=50,
+    ylinscale=0.2,
+    logscale=True,
+    max_n_points=50000,
     c = None,
     **_,
 ):
@@ -480,8 +504,10 @@ def unmixing_plot(
     FSIZE = 5
     fig, axes = plt.subplots(NPROT, NPROT, figsize=(NPROT * FSIZE, NPROT * FSIZE))
     for ctrl_id, ctrl_name in enumerate(protein_names):
-        Y = controls_observations[ctrl_name]
         X = controls_abundances[ctrl_name]
+        if X.shape[0] > max_n_points:
+            idx = np.random.choice(X.shape[0], max_n_points, replace=False)
+            X = X[idx, :]
         for pid, prot_name in enumerate(protein_names):
             if c is not None:
                 color = c[pid]
@@ -505,12 +531,111 @@ def unmixing_plot(
             ax.scatter(X[:, pid], X[:, ctrl_id], s=0.1, alpha=0.2, c=color)
             ax.set_ylabel(f'{ctrl_name}')
             ax.set_xlabel(f'{prot_name}')
-            ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
-            ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
+            if logscale:
+                ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
+                ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
             if xlims is not None:
                 ax.set_xlim(xlims)
             if ylims is not None:
                 ax.set_ylim(ylims)
     fig.tight_layout()
     return fig, axes
+
+
+def range_plots(
+    protein_names, channel_names, absolute_ranges, relative_ranges, unsaturated, dpi=200
+):
+    from matplotlib.patches import Circle
+
+    base_size = 1.0
+    range_size = 0.4
+    nchannels = len(channel_names)
+    nproteins = len(protein_names)
+    coords = np.meshgrid(np.arange(nchannels), np.arange(nproteins))
+    coords2d = np.stack(coords, axis=-1).reshape(-1, 2)
+    ar = (absolute_ranges / absolute_ranges.max()).flatten()
+    rr = (relative_ranges / relative_ranges.max()).flatten()
+    unsaturated_proportion = np.mean(unsaturated, axis=1).flatten()
+    fig, ax = plt.subplots(
+        1,
+        1,
+        figsize=(base_size * nchannels, base_size * nproteins),
+        sharex=True,
+        sharey=True,
+        dpi=dpi,
+    )
+    colors = [get_bio_color(pname) for pname in protein_names for _ in range(nchannels)]
+
+    # ax.scatter(*coords2d.T, s=(range_size*ar)**2, alpha=0.5, linewidths=1, c=colors, edgecolors='k')
+    # ax.scatter(*coords2d.T, s=(range_size*rr)**2, alpha=0.5, facecolors='none', linewidths=1, edgecolors='k', ls='--')
+
+    def draw_clipped_circle(ax, x, y, radius, color, clip_at=0.5, **kwargs):
+        # circle = Circle(xy, radius)#, color=color, **kwargs)
+        circle = Circle((x, y), radius, color=color, **kwargs, fill=True, edgecolor='none', lw=0)
+        contour_circle = Circle((x, y), radius, color='k', fill=False, **kwargs, lw=0.5)
+        # clip circle at clip_at * h))eight with a rectangle
+        eps = 0.01
+        rect = plt.Rectangle(
+            (x - radius - eps, y - radius - eps),
+            2 * (radius + eps),
+            2 * (radius * clip_at + eps),
+            facecolor='none',
+            edgecolor='none',
+        )
+        ax.add_patch(rect)
+        pc = ax.add_patch(circle)
+        pc.set_clip_path(rect)
+        ax.add_patch(contour_circle)
+
+    for i, (x, y) in enumerate(coords2d):
+
+        absolute_radius = range_size * np.sqrt(ar[i])
+        relative_radius = range_size * np.sqrt(rr[i])
+        draw_clipped_circle(ax, x, y, absolute_radius, colors[i], clip_at=unsaturated_proportion[i])
+        contour_relative_circle = Circle(
+            (x, y), relative_radius, color='k', fill=False, ls='--', alpha=0.5, lw=0.5
+        )
+        ax.add_patch(contour_relative_circle)
+        ax.text(x, y - 0.15, f'{100.0*ar[i]:.1f}%', ha='center', va='center', fontsize=8, color='k')
+
+        if unsaturated_proportion[i] < 0.999:
+            ax.text(
+                x + 0.25,
+                y + 0.5,
+                f'{100.0*(1.0-unsaturated_proportion[i]):.1f}% o.o.r',
+                ha='left',
+                va='center',
+                fontsize=8,
+                color='k',
+            )
+            ax.plot(
+                [x, x + 0.2],
+                [y + (absolute_radius * unsaturated_proportion[i]), y + 0.5],
+                color='k',
+                lw=0.5,
+                alpha=0.5,
+            )
+
+    # remove frame
+    ax.set_frame_on(False)
+    # set labels
+    ax.set_xticks(np.arange(nchannels))
+    ax.set_xticklabels(channel_names, rotation=40)
+    ax.set_yticks(np.arange(nproteins))
+    ax.set_yticklabels(protein_names)
+    # bigger lims
+    ax.set_xlim(-0.5, nchannels - 0.5)
+    ax.set_ylim(-0.5, nproteins - 0.5)
+    ax.set_aspect('equal')
+
+    # grid:
+    ax.grid(True, which='both', axis='both', alpha=0.15, color='k', lw=0.5, ls='--')
+    ax.set_axisbelow(True)
+
+    # ax.set_title('Absolute ranges (filled) and std normalized ranges (dashed)')
+    fig.tight_layout()
+
+    return fig, ax, coords2d
+
+
 

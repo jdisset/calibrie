@@ -7,9 +7,13 @@ from typing import List, Dict, Tuple
 from . import utils as ut
 import numpy as np
 import jax.numpy as jnp
+from . import plots, utils
 
 _VALID_BLANK_NAMES = ['BLANK', 'EMPTY', 'INERT', 'CNTL']
 _VALID_ALL_NAMES = ['ALL', 'ALLCOLOR', 'ALLCOLORS', 'FULL']
+
+EPSILON = 1e-6
+
 
 class LoadControls(Task):
     """
@@ -85,9 +89,11 @@ class LoadControls(Task):
                 continue
             prot_mask = (single_masks) & (self.controls_masks[:, pid]).astype(bool)
             prot_values = self.controls_values[prot_mask]
-            prot_sat = (prot_values <= self.saturation_thresholds['lower']) | (
-                prot_values >= self.saturation_thresholds['upper']
+
+            prot_sat = (prot_values <= self.saturation_thresholds[:, 0]) | (
+                prot_values >= self.saturation_thresholds[:, 1]
             )
+
             sat_proportion = prot_sat.sum(axis=0) / prot_sat.shape[0]
             dyn_range = np.log10(np.quantile(prot_values, [0.001, 0.999], axis=0).ptp(axis=0))
             effective_range = dyn_range.copy()
@@ -131,7 +137,6 @@ class LoadControls(Task):
 
         controls_order = sorted(list(self.controls.keys()))
 
-
         self.protein_names = sorted(
             list(
                 set(
@@ -169,8 +174,8 @@ class LoadControls(Task):
         assert has_blank, f'BLANK control not found. Should be named any of {_VALID_BLANK_NAMES}'
         assert has_all, f'ALLCOLOR control not found. Should be named any of {_VALID_ALL_NAMES}'
 
-        self.controls_values = jnp.vstack(controls_values)
-        self.controls_masks = jnp.vstack(controls_masks)
+        self.controls_values = np.vstack(controls_values)
+        self.controls_masks = np.vstack(controls_masks)
 
         assert (
             self.controls_values.shape[0] == self.controls_masks.shape[0]
@@ -184,10 +189,8 @@ class LoadControls(Task):
 
         self.log.debug(f"Loaded {self.controls_values.shape[0]} events")
 
-        self.saturation_thresholds = {
-            'lower': np.quantile(self.controls_values, 0.0001, axis=0),
-            'upper': np.quantile(self.controls_values, 0.9999, axis=0),
-        }
+        self.saturation_thresholds = utils.estimate_saturation_thresholds(self.controls_values)
+
         self.log.debug(f"Saturation thresholds: {self.saturation_thresholds}")
 
         self.reference_channels = self.pick_reference_channels()
@@ -205,4 +208,3 @@ class LoadControls(Task):
             'saturation_thresholds': self.saturation_thresholds,
             'reference_channels': self.reference_channels,
         }
-

@@ -66,8 +66,10 @@ def load_to_df(data, column_order=None):
     df = df.reset_index(drop=True)
     return df
 
+
 DEFAULT_LOG_RESCALE = 1e3
 DEFAULT_LOG_OFFSET = 1e3
+
 
 def logtransform(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
     return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
@@ -356,7 +358,7 @@ def fit_stacked_poly_coeffs(x, y, w, mticks, stds, degree=1):
     weights = weights * w[None, :]
 
     def pfit(x, y, w):
-        ww = jnp.where(w.sum() > 0, w, jnp.ones_like(w)*1e-12)
+        ww = jnp.where(w.sum() > 0, w, jnp.ones_like(w) * 1e-12)
         return jnp.polyfit(x, y, deg=degree, w=ww)
 
     coeffs = vmap(pfit, in_axes=(None, None, 0))(x, y, weights)
@@ -435,6 +437,9 @@ def fit_stacked_poly_at_quantiles(x, y, w, quantiles, degree=1):
 def estimate_autofluorescence(controls_values, controls_masks):
     zero_masks = controls_masks.sum(axis=1) == 0
     return np.median(controls_values[zero_masks], axis=0)
+
+def estimate_saturation_thresholds(controls_values, epsilon=1e-6):
+    return np.quantile(controls_values, [0.0001, 0.9999], axis=0).T + np.array([epsilon, -epsilon])
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
