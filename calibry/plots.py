@@ -5,6 +5,7 @@ from matplotlib import transforms as mtransforms
 from matplotlib.ticker import FixedLocator, FuncFormatter
 import matplotlib.ticker as ticker
 import jax
+from . import  utils
 
 ### {{{                    --     plot styling tools     --
 
@@ -147,6 +148,9 @@ def style_violin(parts):
     parts['cmins'].set_color('black')
     parts['cmins'].set_linewidth(0.5)
 
+
+import matplotlib.collections as mcoll
+import matplotlib.path as mpath
 
 
 
@@ -298,6 +302,7 @@ class SplineExponentialScale(mscale.ScaleBase):
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
+
 
 def fluo_scatter(
     rawx,
@@ -482,6 +487,17 @@ def plot_channels_to_reference(
     fig.tight_layout()
     return fig, axes
 
+from functools import partial
+
+def symlog(x, linthresh=50, linscale=0.4):
+    # log10 with linear scale around 0
+    sign = np.sign(x)
+    x = np.abs(x)
+    diff = np.log10(linthresh) * (1.0 - linscale)
+    x = np.where(x > linthresh, np.log10(x)-diff, linscale * np.log10(linthresh)*x / linthresh)
+    x = x * sign
+    return x
+
 def unmixing_plot(
     controls_observations,
     controls_abundances,
@@ -490,16 +506,34 @@ def unmixing_plot(
     xlims=[-1e6, 1e6],
     ylims=[-1e2, 1e6],
     description='',
-    xlinthresh=50,
-    xlinscale=0.4,
-    ylinthresh=50,
-    ylinscale=0.2,
+    linthresh=50,
+    linscale=0.3,
     logscale=True,
-    max_n_points=50000,
+    max_n_points=100000,
+    linearity_models=None,
+    std_models=None,
+    linearity_lims=(0.1,0.5),
+    std_lims=(1.5,3.5),
     c = None,
     **_,
 ):
+    # tr = partial(utils.spline_biexponential, threshold=500, base=10)
+    # itr = partial(utils.inverse_spline_biexponential, threshold=10)
+    tr = partial(symlog, linthresh=linthresh, linscale=linscale)
     # adding the 'all' to protein names:
+    xlims = tr(np.asarray(xlims))
+    ylims = tr(np.asarray(ylims))
+
+    from matplotlib.colors import LinearSegmentedColormap
+    # get colormap
+    ncolors = 256
+    color_array = plt.get_cmap('jet')(range(ncolors))
+    # change alpha values
+    color_array[:,-1] = np.linspace(0.2,1.0,ncolors)
+    # create a colormap object
+    map_object = LinearSegmentedColormap.from_list(name='ja',colors=color_array)
+    # register this new colormap with matplotlib
+
     NPROT = len(protein_names)
     FSIZE = 5
     fig, axes = plt.subplots(NPROT, NPROT, figsize=(NPROT * FSIZE, NPROT * FSIZE))
@@ -508,6 +542,7 @@ def unmixing_plot(
         if X.shape[0] > max_n_points:
             idx = np.random.choice(X.shape[0], max_n_points, replace=False)
             X = X[idx, :]
+
         for pid, prot_name in enumerate(protein_names):
             if c is not None:
                 color = c[pid]
@@ -528,16 +563,87 @@ def unmixing_plot(
                 )
                 ax.axis('off')
                 continue
-            ax.scatter(X[:, pid], X[:, ctrl_id], s=0.1, alpha=0.2, c=color)
-            ax.set_ylabel(f'{ctrl_name}')
-            ax.set_xlabel(f'{prot_name}')
-            if logscale:
-                ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
-                ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
+
+            Xtr = tr(X)
+            # ax.scatter(X[:, pid], X[:, ctrl_id], s=0.1, alpha=0.2, c=color)
+            # ax.scatter(Xtr[:, pid], Xtr[:, ctrl_id], s=0.1, alpha=0.2, c=color)
+
+            # with a histogram instead:
+            h, xedges, yedges = np.histogram2d(
+                Xtr[:, pid],
+                Xtr[:, ctrl_id],
+                bins=700,
+                range=[xlims, ylims],
+                density=False,
+            )
+
+            h = np.log10(h + 1).T
+
+            cmap = map_object
+            # set under to be transparent:
+            cmap.set_under('w', alpha=0)
+            ax.imshow(
+                h,
+                extent=[*xlims, *ylims],
+                origin='lower',
+                aspect='auto',
+                cmap=cmap,
+                vmin=0.01,
+                vmax=1,
+            )
+
+
+
+            ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+            ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
             if xlims is not None:
                 ax.set_xlim(xlims)
             if ylims is not None:
                 ax.set_ylim(ylims)
+
+            if (linearity_models is not None and linearity_models[ctrl_id][pid] is not None):
+                ybounds = np.array(np.quantile(X[:, ctrl_id], [0.01, 0.998]))
+                yrange = ybounds[1] - ybounds[0]
+
+                x = np.linspace(*utils.logtransform(ybounds), 100)
+                lparams = linearity_models[ctrl_id][pid]
+                fx = utils.evaluate_stacked_poly(x, lparams)
+                fxl = tr(utils.inv_logtransform(fx))
+                xl = tr(utils.inv_logtransform(x))
+
+                z = np.log10(np.maximum(np.abs(fxl), 1)) / np.log10(np.maximum(yrange, 1.1))
+
+                points = np.array([fxl, xl]).T.reshape(-1, 1, 2)
+                segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                lc = mcoll.LineCollection(segments, array=z, cmap='RdYlGn_r', linewidth=1.25, alpha=1, clim=linearity_lims)
+                ax.add_collection(lc)
+
+                if std_models is not None:
+                    sparams = std_models[ctrl_id][pid]
+                    std = utils.evaluate_stacked_poly(x, sparams)
+                    stdl = utils.inv_logtransform(std)
+
+                    std_ratio = np.log10(np.maximum(yrange, 1)) / np.log10(np.maximum(stdl, 1.1))
+
+
+                    # we want a background that shows stdl as color
+                    xlims = ax.get_xlim()
+                    ylims = ax.get_ylim()
+                    mx, my = np.meshgrid(np.linspace(*xlims, 2), np.concatenate([[ylims[0]], xl, [ylims[1]]]))
+                    mz = np.ones_like(mx) * np.pad(std_ratio, (1, 1), mode='edge')[:, None]
+
+                    # put the colormesh in background
+                    cmap = plt.get_cmap('Greys_r')
+                    cmap.set_under('w', alpha=0)
+                    pm = ax.pcolormesh(mx,my,mz,cmap=cmap, alpha=0.5, vmin=std_lims[0], vmax=std_lims[1], shading='auto', zorder=-1)
+
+
+            ax.set_ylabel(f'{ctrl_name}')
+            ax.set_xlabel(f'{prot_name}')
+            # if logscale:
+                # ax.set_xscale('symlog', linthresh=(linthresh), linscale=linscale)
+                # ax.set_yscale('symlog', linthresh=(linthresh), linscale=linscale)
+
     fig.tight_layout()
     return fig, axes
 

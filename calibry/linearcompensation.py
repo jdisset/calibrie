@@ -49,6 +49,7 @@ import jax.numpy as jnp
 import numpy as np
 import time
 import lineax as lx
+from functools import partial
 
 from . import plots, utils
 import matplotlib.pyplot as plt
@@ -205,7 +206,10 @@ class LinearCompensation(Task):
         controls_masks: np.ndarray,
         protein_names: List,
         channel_names: List,
-        abundances_scaler=1.0,
+        linearity_measure=True,
+        linearity_model_resolution=7,
+        linearity_model_degree=2,
+        linearity_model_n = 10000,
         **kw,
     ):
 
@@ -216,18 +220,35 @@ class LinearCompensation(Task):
         controls_observations = {}
         controls_abundances = {}
         controls_errors = {}
+
+        reg = partial(
+            utils.regression, resolution=linearity_model_resolution, degree=linearity_model_degree
+        )
+
+        linearity_models = None
+        if linearity_measure:
+            linearity_models = []
+            std_models = []
+
         for pid, pname in enumerate(protein_names):
             self.log.debug(f"unmixing {pname}")
             prot_mask = (single_masks) & (controls_masks[:, pid]).astype(bool)
             y = controls_values[prot_mask]
             x = np.array(self.process(y, channel_names)['abundances_AU'])
-            # if pname in scale_ctrl_by:
-            # x[:, pid] = x[:, pid] / scale_ctrl_by[pname]
             controls_observations[pname] = y
-            controls_abundances[pname] = x * abundances_scaler
+            controls_abundances[pname] = x
+            if linearity_measure:
+                xbounds = np.array((x.min(), x.max()))
+                xs = x[np.random.choice(x.shape[0], linearity_model_n, replace=True)]
+                linparams = [reg(xs[:, pid], xs[:, i], np.ones_like(xs[:,i]), xbounds) for i in range(x.shape[1])]
+                linearity_models.append(linparams)
+                stdparams = [reg(xs[:, pid], np.abs(xs[:, i]), np.ones_like(xs[:,i]), xbounds) for i in range(x.shape[1])]
+                std_models.append(stdparams)
+
 
         f, a = spillover_matrix_plot(self.spillover_matrix, channel_names, protein_names)
         f.suptitle("Spillover matrix", fontsize=16, y=1.05)
+
 
         f, a = plots.unmixing_plot(
             controls_observations,
@@ -235,6 +256,8 @@ class LinearCompensation(Task):
             protein_names,
             channel_names,
             decription='linear model, ',
+            linearity_models=linearity_models,
+            std_models=std_models,
             **kw,
         )
 

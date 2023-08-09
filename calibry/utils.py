@@ -68,7 +68,7 @@ def load_to_df(data, column_order=None):
 
 
 DEFAULT_LOG_RESCALE = 1e3
-DEFAULT_LOG_OFFSET = 1e3
+DEFAULT_LOG_OFFSET = 300
 
 
 def logtransform(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
@@ -124,7 +124,7 @@ def spline_biexponential(x, threshold=100, base=10):
     """
 
     def positive_half(x):
-        return jnp.where(x > threshold, jnp.log(x) / jnp.log(base), cubic_exp_fwd(x, threshold))
+        return jnp.where(x > threshold, jnp.log(x) / jnp.log(base), cubic_exp_fwd(x, threshold, base))
 
     return jnp.where(x > 0, positive_half(x), -positive_half(-x))
 
@@ -136,7 +136,7 @@ def inverse_spline_biexponential(x, threshold=100, base=10):
 
     def positive_half(x):
         return jnp.where(
-            x > jnp.log(threshold) / jnp.log(base), base**x, cubic_exp_inv(x, threshold)
+            x > jnp.log(threshold) / jnp.log(base), base**x, cubic_exp_inv(x, threshold, base)
         )
 
     return jnp.where(x > 0, positive_half(x), -positive_half(-x))
@@ -427,6 +427,12 @@ def fit_stacked_poly_at_quantiles(x, y, w, quantiles, degree=1):
     stds = (diff[:-1] + diff[1:]) / 2
     return fit_stacked_poly_coeffs(x, y, w, mticks, stds, degree=degree)
 
+@partial(jax.jit, static_argnames=("resolution", "degree"))
+def regression(x, y, w, xbounds, resolution, degree):
+    xbounds = logtransform(xbounds)
+    x_tr, y_tr = logtransform(x), logtransform(y)
+    params = fit_stacked_poly_uniform_spacing(x_tr, y_tr, w, *xbounds, resolution, degree)
+    return params
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
