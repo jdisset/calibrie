@@ -50,7 +50,6 @@ import numpy as np
 import time
 import lineax as lx
 from functools import partial
-
 from . import plots, utils
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple
@@ -81,15 +80,17 @@ class LinearCompensation(Task):
         use_inverse_variance_estimate_weights=True,
         variance_weight_cutoff=100,
         channel_weight_attenuation_power=2.0,
+        unmix_controls=True,
         **kwargs,
     ):
         super().__init__(**kwargs)
+
         self.mode = mode
         self.use_matrix = use_matrix
         self.use_inverse_variance_estimate_weights = use_inverse_variance_estimate_weights
         self.variance_weight_cutoff = variance_weight_cutoff
         self.channel_weight_attenuation_power = channel_weight_attenuation_power
-
+        self.unmix_controls = unmix_controls
 
     def initialize(
         self,
@@ -101,6 +102,7 @@ class LinearCompensation(Task):
         reference_channels,
         **_,
     ):
+
         self.autofluorescence = utils.estimate_autofluorescence(controls_values, controls_masks)
         self.saturation_thresholds = saturation_thresholds
         self.controls_values = controls_values
@@ -108,7 +110,6 @@ class LinearCompensation(Task):
         self.protein_names = protein_names
         self.channel_names = channel_names
         self.reference_channels = reference_channels
-
 
         if self.use_matrix is not None:
             self.spillover_matrix = self.use_matrix
@@ -128,10 +129,17 @@ class LinearCompensation(Task):
         self.channel_weights = self.compute_channel_weights(controls_values, controls_masks)
         self.log.debug(f"Computed channel weights:\n{self.channel_weights}")
 
+        if self.unmix_controls:
+            self.log.debug(f"Unmixing controls")
+            self.controls_abundances_AU = self.process(controls_values, channel_names)[
+                'abundances_AU'
+            ]
+
         return {
             'autofluorescence': self.autofluorescence,
             'spillover_matrix': self.spillover_matrix,
             'channel_weights': self.channel_weights,
+            'controls_abundances_AU': self.controls_abundances_AU,
             'F_mat': generate_function_matrix_from_spillover(self.spillover_matrix),
         }
 
@@ -142,7 +150,6 @@ class LinearCompensation(Task):
         assert observations_raw.shape[1] == len(
             channel_names
         ), "Mismatch between observations and channels"
-
 
         not_saturated = (observations_raw > self.saturation_thresholds[:, 0]) & (
             observations_raw < self.saturation_thresholds[:, 1]
@@ -155,7 +162,6 @@ class LinearCompensation(Task):
         else:
             rough_variance_estimate = 1.0
 
-
         W = not_saturated * rough_variance_estimate * self.channel_weights
 
         @jit
@@ -165,13 +171,13 @@ class LinearCompensation(Task):
                 S_weighted = S * w[None, :]
                 x, residuals, rank, s = jnp.linalg.lstsq(S_weighted.T, y_weighted, rcond=None)
                 return x
+
             return vmap(solve_one)(Y, W)
 
         X = solve_X(Y, W, self.spillover_matrix)
 
         self.log.debug(f"Linear unmixing done")
         return {'abundances_AU': X}
-
 
     def get_observations_list(self, controls_values, controls_masks):
         # let's isolate all the available single controls
@@ -183,84 +189,61 @@ class LinearCompensation(Task):
         ]
         return null_observations, singlectrl_observations
 
-
     def compute_channel_weights(self, controls_values, controls_masks):
         nproteins, nchannels = (controls_masks.shape[1], controls_values.shape[1])
         corrected_values = controls_values - self.autofluorescence
-        null_observations, singleprt_observations = self.get_observations_list(corrected_values, controls_masks)
+        null_observations, singleprt_observations = self.get_observations_list(
+            corrected_values, controls_masks
+        )
         null_std = np.maximum(null_observations.std(axis=0), 1e-6)
-        absolute_ranges = np.array([np.subtract(*np.quantile(s, [0.999, 0.001], axis=0)) for s in singleprt_observations])
+        absolute_ranges = np.array(
+            [np.subtract(*np.quantile(s, [0.999, 0.001], axis=0)) for s in singleprt_observations]
+        )
         assert absolute_ranges.shape == (nproteins, nchannels)
 
         relative_ranges = absolute_ranges / null_std[None, :]
         norm_relative_ranges = relative_ranges / relative_ranges.max(axis=1)[:, None]
 
-        channel_weights = (norm_relative_ranges.max(axis=0)) ** self.channel_weight_attenuation_power
+        channel_weights = (
+            norm_relative_ranges.max(axis=0)
+        ) ** self.channel_weight_attenuation_power
 
         return channel_weights
 
-
     def diagnostics(
         self,
-        controls_values: np.ndarray,
-        controls_masks: np.ndarray,
         protein_names: List,
         channel_names: List,
-        linearity_measure=True,
-        linearity_model_resolution=7,
-        linearity_model_degree=2,
-        linearity_model_n = 10000,
+        controls_masks,
         **kw,
     ):
 
         assert self.spillover_matrix is not None, "Spillover matrix not computed"
         assert self.autofluorescence is not None, "Autofluorescence not computed"
 
-        single_masks = (controls_masks.sum(axis=1) == 1).astype(bool)
-        controls_observations = {}
-        controls_abundances = {}
-        controls_errors = {}
-
-        reg = partial(
-            utils.regression, resolution=linearity_model_resolution, degree=linearity_model_degree
-        )
-
-        linearity_models = None
-        if linearity_measure:
-            linearity_models = []
-            std_models = []
-
-        for pid, pname in enumerate(protein_names):
-            self.log.debug(f"unmixing {pname}")
-            prot_mask = (single_masks) & (controls_masks[:, pid]).astype(bool)
-            y = controls_values[prot_mask]
-            x = np.array(self.process(y, channel_names)['abundances_AU'])
-            controls_observations[pname] = y
-            controls_abundances[pname] = x
-            if linearity_measure:
-                xbounds = np.array((x.min(), x.max()))
-                xs = x[np.random.choice(x.shape[0], linearity_model_n, replace=True)]
-                linparams = [reg(xs[:, pid], xs[:, i], np.ones_like(xs[:,i]), xbounds) for i in range(x.shape[1])]
-                linearity_models.append(linparams)
-                stdparams = [reg(xs[:, pid], np.abs(xs[:, i]), np.ones_like(xs[:,i]), xbounds) for i in range(x.shape[1])]
-                std_models.append(stdparams)
-
-
+        if not self.unmix_controls:
+            self.log.debug(f"Unmixing controls")
+            self.controls_abundances_AU = self.process(controls_values, channel_names)[
+                'abundances_AU'
+            ]
         f, a = spillover_matrix_plot(self.spillover_matrix, channel_names, protein_names)
         f.suptitle("Spillover matrix", fontsize=16, y=1.05)
 
+        controls_abundances, std_models = utils.generate_controls_dict(
+            self.controls_abundances_AU,
+            self.controls_masks,
+            protein_names,
+            **kw,
+        )
 
         f, a = plots.unmixing_plot(
-            controls_observations,
             controls_abundances,
             protein_names,
             channel_names,
             decription='linear model, ',
-            linearity_models=linearity_models,
             std_models=std_models,
             **kw,
         )
-
 
     def compute_spectral_signature_ALS(self, max_iterations=50, jax_seed=0, verbose=False, w=None):
         # Spectral signature estimation using Alternating Least Squares (ALS) method.
@@ -320,7 +303,6 @@ class LinearCompensation(Task):
 
         return S, X
 
-
     def compute_spectral_signature_WLR(
         self,
         min_points=100,
@@ -356,7 +338,9 @@ class LinearCompensation(Task):
 
         # first let's isolate all the available single controls
         one_hot = lambda x, n: np.eye(n)[x]
-        single_controls = one_hot(np.arange(len(self.protein_names)), len(self.protein_names)).astype(bool)
+        single_controls = one_hot(
+            np.arange(len(self.protein_names)), len(self.protein_names)
+        ).astype(bool)
         counts = np.array([np.all(Mp == sc, axis=1).sum() for sc in single_controls])
 
         if logger is not None:
@@ -375,7 +359,11 @@ class LinearCompensation(Task):
         padded_Y = np.array([np.pad(y, ((0, pad_to - len(y)), (0, 0))) for y in all_Y])
         padded_W = np.array([np.pad(w, ((0, pad_to - len(w)), (0, 0))) for w in all_W])
 
-        assert padded_Y.shape == padded_W.shape == (len(self.protein_names), pad_to, len(self.channel_names))
+        assert (
+            padded_Y.shape
+            == padded_W.shape
+            == (len(self.protein_names), pad_to, len(self.channel_names))
+        )
 
         # now we can compute the weighted linear regression for each channel
 
@@ -391,6 +379,7 @@ class LinearCompensation(Task):
         )
 
         return np.clip(mat, 0, None)
+
 
 def generate_function_matrix_from_spillover(spillover_matrix):
     def make_lin_fun(a):
@@ -434,5 +423,3 @@ def spillover_matrix_plot(
                 color=color,
             )
     return fig, ax
-
-

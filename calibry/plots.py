@@ -5,7 +5,7 @@ from matplotlib import transforms as mtransforms
 from matplotlib.ticker import FixedLocator, FuncFormatter
 import matplotlib.ticker as ticker
 import jax
-from . import  utils
+from . import utils
 
 ### {{{                    --     plot styling tools     --
 
@@ -103,7 +103,6 @@ def get_bio_color(name, default='k'):
     return color
 
 
-
 def mkfig(rows, cols, size=(7, 7), **kw):
     fig, ax = plt.subplots(rows, cols, figsize=(cols * size[0], rows * size[1]), **kw)
     return fig, ax
@@ -153,11 +152,10 @@ import matplotlib.collections as mcoll
 import matplotlib.path as mpath
 
 
-
-
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 ### {{{                     --     spline_exp scale     --
+
 
 class CustomLocator(ticker.Locator):
     def __init__(self, thresh, base):
@@ -174,7 +172,7 @@ class CustomLocator(ticker.Locator):
         total_decades = np.log10(np.abs(vmax - vmin))
         nlin_ticks = 7
         nlin_ticks = int(max(2, nlin_ticks - total_decades))
-        d = int(min(5, 1+total_decades//2))
+        d = int(min(5, 1 + total_decades // 2))
         print(total_decades, nlin_ticks, d)
         if (vmin < self.thresh / d) and (vmax > -self.thresh / d):
             # symmetric around 0
@@ -195,7 +193,6 @@ class CustomLocator(ticker.Locator):
         if vmin <= -self.thresh:
             log_ticks_negative = -ticker.LogLocator(base=self.base).tick_values(1, -vmin)
             log_ticks_negative = log_ticks_negative[log_ticks_negative <= -self.thresh]
-
 
         return np.concatenate((log_ticks_negative, linear_ticks, log_ticks_positive))
 
@@ -228,27 +225,36 @@ class CustomMinorLocator(ticker.Locator):
         return np.concatenate((log_ticks_negative, log_ticks_positive))
 
 
-class CustomFormatter(ticker.Formatter):
-    def __init__(self, thresh, base):
-        self.thresh = thresh
-        self.base = base
-
-    def __call__(self, x, pos=None):
-        abs_x = abs(x)
-        if abs_x < 1000:
-            if x == int(x):
-                return f'{x:.0f}'  # No decimal point
-            else:
-                return f'{x:.1f}'  # Up to 1 decimal point
+def format_powers(x, _):
+    abs_x = abs(x)
+    if abs_x < 1000:
+        if x == int(x):
+            return f'{x:.0f}'  # No decimal point
         else:
-            E = int(np.log10(abs_x))
-            if x == int(x):
-                return r'${0:.0f}e{1}$'.format(x // 10**E, E)
-            else:
-                return r'${0:.1f}e{1}$'.format(x / 10**E, E)
+            return f'{x:.1f}'  # Up to 1 decimal point
+    else:
+        E = int(np.log10(abs_x))
+        if x == int(x):
+            return r'${0:.0f}e{1}$'.format(x // 10**E, E)
+        else:
+            return r'${0:.1f}e{1}$'.format(x / 10**E, E)
+
+
+class PowerFormatter(ticker.Formatter):
+    def __init__(self, values, skip10=False):
+        self.values = values
+        self.skip10 = skip10
+
+    def __call__(self, x, pos):
+        v = self.values[pos]
+        if self.skip10 and abs(v) == 10:
+            return ''
+        return format_powers(v, None)
 
 
 from matplotlib import scale as mscale
+
+
 class SplineExponentialScale(mscale.ScaleBase):
     name = 'spline_exp'
 
@@ -300,7 +306,6 @@ class SplineExponentialScale(mscale.ScaleBase):
             return SplineExponentialScale.SplineExponentialTransform(self.thresh, self.base)
 
 
-
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 
@@ -350,8 +355,10 @@ def fluo_scatter(
 
     return fig, axes
 
+
 def plot_fluo_distribution(ax, data, res=2000):
     from jax.scipy.stats import gaussian_kde
+
     xmax = np.max(data)
     XX = np.linspace(0.0, 1.1 * xmax, res)
     kde = gaussian_kde(data.T, bw_method=0.01)
@@ -364,6 +371,7 @@ def plot_fluo_distribution(ax, data, res=2000):
     ax.plot(-densities, XX, color='k', alpha=0.5, lw=0.7)
     ax.set_xlim(-0.5, 0.5)
     remove_axis_and_spines(ax)
+
 
 def scatter_matrix(
     Y,
@@ -429,10 +437,16 @@ def plot_channels_to_reference(
     logscale=False,
     dpi=150,
     data_transform=None,
-    ybound_quantiles=None,
+    quantiles_limits=None,
     max_n_points=50000,
     disable_reference_plot=True,
     include_all_ctrl=True,
+    nbins=300,
+    xlims=None,
+    ylims=None,
+    density_min=0.01,
+    density_max=None,
+    noise_smooth=0.25,
     **_,
 ):
     NPROT = len(protein_names)
@@ -465,74 +479,194 @@ def plot_channels_to_reference(
                 )
                 ax.axis('off')
                 continue
-            sc = ax.scatter(Y[:, ref_chan], Y[:, cid], s=0.1, alpha=1, c='k')
+
+            x = Y[:, ref_chan]
+            y = Y[:, cid]
+            if xlims is None:
+                xlims = [np.min(x), np.max(x)]
+            if ylims is None:
+                ylims = [np.min(y), np.max(y)]
+            if quantiles_limits is not None:
+                xlims = np.quantile(x, quantiles_limits)
+                ylims = np.quantile(y, quantiles_limits)
+
+
+            if logscale:
+                tr, itr, xlims_tr, ylims_tr = make_symlog_ax(ax, xlims, ylims)
+                x = tr(x)
+                y = tr(y)
+            else:
+                xlims_tr, ylims_tr = xlims, ylims
+                tr = lambda x: x
+                itr = lambda x: x
+
+            density_histogram2d(
+                ax,
+                x,
+                y,
+                xlims_tr,
+                ylims_tr,
+                nbins,
+                vmin=density_min,
+                vmax=density_max,
+                noise_smooth=noise_smooth,
+            )
+
+            ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+            ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+
             if F_mat is not None:
                 # Fmat is a list of list of functions, of shape (NPROT, NCHAN)
                 f = F_mat[ctrl_id][cid]
-                x = np.linspace(*ax.get_xlim(), 500)
-                ax.plot(x, f(x), c='r', lw=1)
+                x = itr(np.linspace(*tr(xlims), 500))
+                y = f(x)
+                ax.plot(tr(x), tr(y), c='w', lw=3)
+                ax.plot(tr(x), tr(y), c='r', lw=1)
+
             if coefs is not None:
-                x = np.linspace(*ax.get_xlim(), 5)
+                x = np.linspace(*xlims, 500)
                 y = x * coefs[ctrl_id][cid]
-                ax.plot(x, y, c='r', lw=1)
+                ax.plot(tr(x), tr(y), c='w', lw=3)
+                ax.plot(tr(x), tr(y), c='r', lw=1)
+
             ax.set_ylabel(f'{chan} (a.u.)')
             ax.set_xlabel(f'{ref_chan_name} (a.u.)')
-            if logscale:
-                ax.set_xscale('symlog', linthresh=(50), linscale=0.4)
-                ax.set_yscale('symlog', linthresh=(50), linscale=0.2)
-            if ybound_quantiles is not None:
-                q = np.quantile(Y[:, cid], ybound_quantiles)
-                yrange = q[1] - q[0]
-                ax.set_ylim(q[0] - yrange*0.05, q[1] + yrange*0.1)
+            ax.set_title(f'{ctrl_name} ctrl')
+
     fig.tight_layout()
     return fig, axes
 
+
 from functools import partial
+
 
 def symlog(x, linthresh=50, linscale=0.4):
     # log10 with linear scale around 0
     sign = np.sign(x)
     x = np.abs(x)
     diff = np.log10(linthresh) * (1.0 - linscale)
-    x = np.where(x > linthresh, np.log10(x)-diff, linscale * np.log10(linthresh)*x / linthresh)
+    x = np.where(x > linthresh, np.log10(x) - diff, linscale * np.log10(linthresh) * x / linthresh)
     x = x * sign
     return x
 
+def inverse_symlog(x, linthresh=50, linscale=0.4):
+    # inverse of symlog
+    sign = np.sign(x)
+    x = np.abs(x)
+    diff = np.log10(linthresh) * (1.0 - linscale)
+    x = np.where(x > linscale * np.log10(linthresh), np.power(10, x + diff), linthresh * x / (linscale * np.log10(linthresh)))
+    x = x * sign
+    return x
+
+
+def powers_of_ten(xmin, xmax, skip_10=False):
+    bounds = np.array([xmin, xmax])
+    logbounds = np.sign(bounds) * np.floor(
+        np.maximum(np.log10(np.maximum(np.abs(bounds), 0.1)), 0)
+    ).astype(int)
+    powers = np.arange(logbounds[0], logbounds[1] + 1)
+    if skip_10:
+        powers = np.delete(powers, np.where(np.abs(powers) == 1))
+    return np.power(10, np.abs(powers)) * np.sign(powers)
+
+
+def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.4, skip10=True, margins=0.05):
+    # ticks at all powers of 10:
+    # tr = partial(symlog, linthresh=linthresh, linscale=linscale)
+    # invtr = partial(inverse_symlog, linthresh=linthresh, linscale=linscale)
+
+    tr = partial(utils.spline_biexponential, threshold=linthresh, compression=linscale)
+    invtr = partial(utils.inverse_spline_biexponential, threshold=linthresh, compression=linscale)
+
+    xlims_tr = tr(np.asarray(xlims))
+    ylims_tr = tr(np.asarray(ylims))
+    xp10 = powers_of_ten(*xlims)
+    yp10 = powers_of_ten(*ylims)
+    xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
+    ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
+    ax.set_xlim(xlims_margin)
+    ax.set_ylim(ylims_margin)
+    ax.set_xticks(tr(xp10))
+    ax.set_yticks(tr(yp10))
+    ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
+    ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
+    return tr, invtr, xlims_tr, ylims_tr
+
+
+def make_density_cmap(name=None, alpha_start=1.0, alpha_end=1.0, base_cmap='Spectral_r'):
+    from matplotlib.colors import LinearSegmentedColormap
+
+    # get colormap
+    ncolors = 256
+    color_array = plt.get_cmap(base_cmap)(range(ncolors))
+    # change alpha values
+    color_array[:, -1] = np.linspace(alpha_start, alpha_end, ncolors)
+    # create a colormap object
+    density_cmap = LinearSegmentedColormap.from_list(name=name, colors=color_array)
+    density_cmap.set_under('w', alpha=0)
+    return density_cmap
+
+
+CALIBRY_DEFAULT_DENSITY_CMAP = make_density_cmap('calibry_density', alpha_start=1.0, alpha_end=1.0)
+
+
+def density_histogram2d(
+    ax, X, Y, xrange, yrange, nbins, cmap=None, vmin=0.01, vmax=1, noise_smooth=0
+):
+
+    if isinstance(nbins, int):
+        nbins = (nbins, nbins)
+
+    xres = np.abs(np.subtract(*xrange)) / nbins[0]
+    yres = np.abs(np.subtract(*yrange)) / nbins[1]
+
+    # X = X + np.random.uniform(size=X.shape) * noise_smooth * xres
+    # Y = Y + np.random.uniform(size=Y.shape) * noise_smooth * yres
+    # w normal noise:
+    X = X + np.random.normal(size=X.shape) * noise_smooth * xres
+    Y = Y + np.random.normal(size=Y.shape) * noise_smooth * yres
+
+    h, xedges, yedges = np.histogram2d(
+        X,
+        Y,
+        bins=nbins,
+        density=False,
+        range=[xrange, yrange],
+    )
+
+    h = np.log10(h + 1).T
+    if cmap is None:
+        cmap = CALIBRY_DEFAULT_DENSITY_CMAP
+
+    ax.imshow(
+        h,
+        extent=[*xrange, *yrange],
+        origin='lower',
+        aspect='auto',
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+    )
+
+
 def unmixing_plot(
-    controls_observations,
     controls_abundances,
     protein_names,
     channel_names,
     xlims=[-1e6, 1e6],
     ylims=[-1e2, 1e6],
     description='',
-    linthresh=50,
-    linscale=0.3,
-    logscale=True,
+    linthresh=200,
+    linscale=0.4,
     max_n_points=100000,
-    linearity_models=None,
     std_models=None,
-    linearity_lims=(0.1,0.5),
-    std_lims=(1.5,3.5),
-    c = None,
+    std_lims=(1.5, 3),
+    nbins=500,
+    noise_smooth=0.25,
+    density_lims=(0.01, 1.5),
     **_,
 ):
-    # tr = partial(utils.spline_biexponential, threshold=500, base=10)
-    # itr = partial(utils.inverse_spline_biexponential, threshold=10)
-    tr = partial(symlog, linthresh=linthresh, linscale=linscale)
     # adding the 'all' to protein names:
-    xlims = tr(np.asarray(xlims))
-    ylims = tr(np.asarray(ylims))
-
-    from matplotlib.colors import LinearSegmentedColormap
-    # get colormap
-    ncolors = 256
-    color_array = plt.get_cmap('jet')(range(ncolors))
-    # change alpha values
-    color_array[:,-1] = np.linspace(0.2,1.0,ncolors)
-    # create a colormap object
-    map_object = LinearSegmentedColormap.from_list(name='ja',colors=color_array)
-    # register this new colormap with matplotlib
 
     NPROT = len(protein_names)
     FSIZE = 5
@@ -544,10 +678,6 @@ def unmixing_plot(
             X = X[idx, :]
 
         for pid, prot_name in enumerate(protein_names):
-            if c is not None:
-                color = c[pid]
-            else:
-                color = 'k'
             ax = axes[ctrl_id, pid]
             if pid == ctrl_id:
                 ax.text(
@@ -564,85 +694,68 @@ def unmixing_plot(
                 ax.axis('off')
                 continue
 
-            Xtr = tr(X)
-            # ax.scatter(X[:, pid], X[:, ctrl_id], s=0.1, alpha=0.2, c=color)
-            # ax.scatter(Xtr[:, pid], Xtr[:, ctrl_id], s=0.1, alpha=0.2, c=color)
+            if xlims is None:
+                xlims = [np.min(X[:, pid]), np.max(X[:, pid])]
+            if ylims is None:
+                ylims = [np.min(X[:, ctrl_id]), np.max(X[:, ctrl_id])]
 
-            # with a histogram instead:
-            h, xedges, yedges = np.histogram2d(
+            tr, invtr, xlims_tr, ylims_tr = make_symlog_ax(
+                ax, xlims, ylims, linthresh=linthresh, linscale=linscale
+            )
+            Xtr = tr(X)
+            density_histogram2d(
+                ax,
                 Xtr[:, pid],
                 Xtr[:, ctrl_id],
-                bins=700,
-                range=[xlims, ylims],
-                density=False,
+                xlims_tr,
+                ylims_tr,
+                nbins,
+                noise_smooth=noise_smooth,
+                vmin=density_lims[0],
+                vmax=density_lims[1],
             )
-
-            h = np.log10(h + 1).T
-
-            cmap = map_object
-            # set under to be transparent:
-            cmap.set_under('w', alpha=0)
-            ax.imshow(
-                h,
-                extent=[*xlims, *ylims],
-                origin='lower',
-                aspect='auto',
-                cmap=cmap,
-                vmin=0.01,
-                vmax=1,
-            )
-
-
 
             ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
             ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
-            if xlims is not None:
-                ax.set_xlim(xlims)
-            if ylims is not None:
-                ax.set_ylim(ylims)
-
-            if (linearity_models is not None and linearity_models[ctrl_id][pid] is not None):
+            if std_models is not None:
                 ybounds = np.array(np.quantile(X[:, ctrl_id], [0.01, 0.998]))
                 yrange = ybounds[1] - ybounds[0]
 
-                x = np.linspace(*utils.logtransform(ybounds), 100)
-                lparams = linearity_models[ctrl_id][pid]
-                fx = utils.evaluate_stacked_poly(x, lparams)
-                fxl = tr(utils.inv_logtransform(fx))
+                x = np.linspace(*utils.logtransform(ybounds), 200)
                 xl = tr(utils.inv_logtransform(x))
 
-                z = np.log10(np.maximum(np.abs(fxl), 1)) / np.log10(np.maximum(yrange, 1.1))
+                sparams = std_models[ctrl_id][pid]
+                std = utils.evaluate_stacked_poly(x, sparams)
+                stdl = utils.inv_logtransform(std)
 
-                points = np.array([fxl, xl]).T.reshape(-1, 1, 2)
-                segments = np.concatenate([points[:-1], points[1:]], axis=1)
-                lc = mcoll.LineCollection(segments, array=z, cmap='RdYlGn_r', linewidth=1.25, alpha=1, clim=linearity_lims)
-                ax.add_collection(lc)
+                std_ratio = np.log10(np.maximum(yrange, 1)) / np.log10(np.maximum(stdl, 1.1))
 
-                if std_models is not None:
-                    sparams = std_models[ctrl_id][pid]
-                    std = utils.evaluate_stacked_poly(x, sparams)
-                    stdl = utils.inv_logtransform(std)
+                # we want a background that shows stdl as color
+                xlims_tr = ax.get_xlim()
+                ylims_tr = ax.get_ylim()
+                mx, my = np.meshgrid(
+                    np.linspace(*xlims_tr, 2),
+                    np.concatenate([[ylims_tr[0]], xl, [ylims_tr[1]]]),
+                )
+                mz = np.ones_like(mx) * np.pad(std_ratio, (1, 1), mode='edge')[:, None]
 
-                    std_ratio = np.log10(np.maximum(yrange, 1)) / np.log10(np.maximum(stdl, 1.1))
-
-
-                    # we want a background that shows stdl as color
-                    xlims = ax.get_xlim()
-                    ylims = ax.get_ylim()
-                    mx, my = np.meshgrid(np.linspace(*xlims, 2), np.concatenate([[ylims[0]], xl, [ylims[1]]]))
-                    mz = np.ones_like(mx) * np.pad(std_ratio, (1, 1), mode='edge')[:, None]
-
-                    # put the colormesh in background
-                    cmap = plt.get_cmap('Greys_r')
-                    cmap.set_under('w', alpha=0)
-                    pm = ax.pcolormesh(mx,my,mz,cmap=cmap, alpha=0.5, vmin=std_lims[0], vmax=std_lims[1], shading='auto', zorder=-1)
-
+                # put the colormesh in background
+                cmap = plt.get_cmap('Reds_r')
+                cmap.set_over('w', alpha=0)
+                pm = ax.pcolormesh(
+                    mx,
+                    my,
+                    mz,
+                    cmap=cmap,
+                    alpha=0.5,
+                    vmin=std_lims[0],
+                    vmax=std_lims[1],
+                    shading='auto',
+                    zorder=-1,
+                )
 
             ax.set_ylabel(f'{ctrl_name}')
             ax.set_xlabel(f'{prot_name}')
-            # if logscale:
-                # ax.set_xscale('symlog', linthresh=(linthresh), linscale=linscale)
-                # ax.set_yscale('symlog', linthresh=(linthresh), linscale=linscale)
 
     fig.tight_layout()
     return fig, axes
@@ -742,6 +855,3 @@ def range_plots(
     fig.tight_layout()
 
     return fig, ax, coords2d
-
-
-
