@@ -116,6 +116,12 @@ class LoadControls(Task):
             )
         return ref_channels
 
+
+    def process(self, pipeline_input, **_):
+        data = ut.load_to_df(pipeline_input, self.use_channels).values
+        assert data.shape[1] == len(self.channel_names)
+        return {'observations_raw': data}
+
     def initialize(self, **_):
 
         self.controls = {

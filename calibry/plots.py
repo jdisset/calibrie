@@ -244,7 +244,6 @@ class PowerFormatter(ticker.Formatter):
     def __init__(self, values, skip10=False):
         self.values = values
         self.skip10 = skip10
-
     def __call__(self, x, pos):
         v = self.values[pos]
         if self.skip10 and abs(v) == 10:
@@ -440,7 +439,6 @@ def plot_channels_to_reference(
     quantiles_limits=None,
     max_n_points=50000,
     disable_reference_plot=True,
-    include_all_ctrl=True,
     nbins=300,
     xlims=None,
     ylims=None,
@@ -559,37 +557,53 @@ def inverse_symlog(x, linthresh=50, linscale=0.4):
     return x
 
 
-def powers_of_ten(xmin, xmax, skip_10=False):
+def powers_of_ten(xmin, xmax, skip10=False):
+    # returns a list of powers of 10 that are between xmin and xmax,
+    # as well as the list of subpoewrs of 10 that are between xmin and xmax (as a separate array)
     bounds = np.array([xmin, xmax])
     logbounds = np.sign(bounds) * np.floor(
         np.maximum(np.log10(np.maximum(np.abs(bounds), 0.1)), 0)
     ).astype(int)
     powers = np.arange(logbounds[0], logbounds[1] + 1)
-    if skip_10:
-        powers = np.delete(powers, np.where(np.abs(powers) == 1))
-    return np.power(10, np.abs(powers)) * np.sign(powers)
+    p10 = np.power(10, np.abs(powers)) * np.sign(powers)
+    # add subticks, that we will return as a separate array
+    subticks = np.concatenate([p * np.arange(1, 10) for p in p10 if p != 0])
+    if skip10:
+        p10 = np.delete(p10, np.where(np.abs(p10) == 10))
+    return p10, subticks
+
+
+
 
 
 def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.4, skip10=True, margins=0.05):
     # ticks at all powers of 10:
     # tr = partial(symlog, linthresh=linthresh, linscale=linscale)
     # invtr = partial(inverse_symlog, linthresh=linthresh, linscale=linscale)
-
     tr = partial(utils.spline_biexponential, threshold=linthresh, compression=linscale)
     invtr = partial(utils.inverse_spline_biexponential, threshold=linthresh, compression=linscale)
+    xlims_tr = xlims
+    ylims_tr = ylims
 
-    xlims_tr = tr(np.asarray(xlims))
-    ylims_tr = tr(np.asarray(ylims))
-    xp10 = powers_of_ten(*xlims)
-    yp10 = powers_of_ten(*ylims)
-    xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
-    ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
-    ax.set_xlim(xlims_margin)
-    ax.set_ylim(ylims_margin)
-    ax.set_xticks(tr(xp10))
-    ax.set_yticks(tr(yp10))
-    ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
-    ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
+    if xlims is not None:
+        xlims_tr = tr(np.asarray(xlims))
+        xp10, xsub = powers_of_ten(*xlims, skip10=skip10)
+        xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
+        ax.set_xlim(xlims_margin)
+        ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
+        ax.set_xticks(tr(xp10))
+        ax.set_xticks(tr(xsub), minor=True)
+
+    if ylims is not None:
+        ylims_tr = tr(np.asarray(ylims))
+        yp10, ysub = powers_of_ten(*ylims, skip10=skip10)
+        ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
+        ax.set_ylim(ylims_margin)
+        ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
+        ax.set_yticks(tr(yp10))
+        ax.set_yticks(tr(ysub), minor=True)
+
+    ax.grid(which='major', alpha=0.5, ls='--', lw=0.5)
     return tr, invtr, xlims_tr, ylims_tr
 
 
@@ -855,3 +869,75 @@ def range_plots(
     fig.tight_layout()
 
     return fig, ax, coords2d
+
+def plot_raw_all_prot_crl(
+    controls_values,
+    controls_masks,
+    channel_names,
+    protein_names,
+    autofluorescence=None,
+    figscale=5,
+    logscale=False,
+    dpi=150,
+    quantiles_limits=None,
+    max_n_points=50000,
+    nbins=300,
+    xlims=None,
+    ylims=None,
+    density_min=0.01,
+    density_max=None,
+    noise_smooth=0.25,
+    **_,
+):
+    NPROT = len(protein_names)
+    NCHAN = len(channel_names)
+    fig, axes = plt.subplots(NCHAN, NCHAN, figsize=(figscale * NCHAN, figscale * NCHAN), dpi=dpi)
+    all_masks = (controls_masks.sum(axis=1) == NPROT).astype(bool)
+    if autofluorescence is None:
+        autofluorescence = np.zeros(NCHAN)
+    Y = controls_values[all_masks] - autofluorescence
+    if Y.shape[0] > max_n_points:
+        idx = np.random.choice(Y.shape[0], max_n_points, replace=False)
+        Y = Y[idx, :]
+    for c1_id, c1_name in enumerate(channel_names):
+        for c2_id, c2_name in enumerate(channel_names):
+            ax = axes[c1_id, c2_id]
+            x = Y[:, c1_id]
+            y = Y[:, c2_id]
+            if xlims is None:
+                xlims = [np.min(x), np.max(x)]
+            if ylims is None:
+                ylims = [np.min(y), np.max(y)]
+            if quantiles_limits is not None:
+                xlims = np.quantile(x, quantiles_limits)
+                ylims = np.quantile(y, quantiles_limits)
+            if logscale:
+                tr, itr, xlims_tr, ylims_tr = make_symlog_ax(ax, xlims, ylims)
+                x = tr(x)
+                y = tr(y)
+            else:
+                xlims_tr, ylims_tr = xlims, ylims
+                tr = lambda x: x
+                itr = lambda x: x
+
+            density_histogram2d(
+                ax,
+                x,
+                y,
+                xlims_tr,
+                ylims_tr,
+                nbins,
+                vmin=density_min,
+                vmax=density_max,
+                noise_smooth=noise_smooth,
+            )
+
+            ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+            ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+            ax.set_ylabel(f'{c2_name} (a.u.)')
+            ax.set_xlabel(f'{c1_name} (a.u.)')
+
+    fig.tight_layout()
+    return fig, axes
+
+

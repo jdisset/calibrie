@@ -71,7 +71,7 @@ class MEFBeadsCalibration(Task):
         density_threshold: float = 0.25,
         resample_observations_to: int = 20000,
         log_poly_threshold=100,
-        log_poly_scale=0.3,
+        log_poly_scale=0.5,
         model_resolution: int = 7,
         model_degree: int = 1,
         **kwargs,
@@ -94,7 +94,9 @@ class MEFBeadsCalibration(Task):
         self.density_threshold = density_threshold
         self.resample_observations_to = resample_observations_to
         if use_channels is not None:
-            raise NotImplementedError('MEF\'s use_channels is not implemented yet, issues with colinearizer')
+            raise NotImplementedError(
+                'MEF\'s use_channels is not implemented yet, issues with colinearizer'
+            )
         self.use_channels = utils.escape(use_channels)
         self.model_resolution = model_resolution
         self.model_degree = model_degree
@@ -107,6 +109,8 @@ class MEFBeadsCalibration(Task):
             compression=log_poly_scale,
             base=10,
         )
+        self.log_poly_threshold = log_poly_threshold
+        self.log_poly_scale = log_poly_scale
 
     def initialize(
         self,
@@ -127,7 +131,6 @@ class MEFBeadsCalibration(Task):
         if self.channel_units[self.calibration_channel_name] is None:
             raise ValueError(f'{self.calibration_channel_name} has no associated units')
 
-
         self.log.debug(
             f'Calibrating with {self.calibration_channel_name} from {reference_protein_name}'
         )
@@ -146,7 +149,7 @@ class MEFBeadsCalibration(Task):
 
         self.beads_data_array = utils.load_to_df(self.beads_data, self.use_channels).values
         if colinearizer is not None:
-            self.beads_data_array = colinearizer.process(self.beads_data_array)['abundances_AU']
+            self.beads_data_array = list(colinearizer.process(self.beads_data_array).values())[0]
 
         self.beads_mef_array = np.array(
             [self.beads_mef_values[self.channel_units[c]] for c in self.use_channels]
@@ -176,10 +179,10 @@ class MEFBeadsCalibration(Task):
         self.log.debug(f'Applying calibration to controls')
         self.controls_abundances_MEF = self.process(controls_abundances_mapped)['abundances_MEF']
 
-        return {'controls_abundances_MEF': self.controls_abundances_MEF,
-                'calibration_units_name': self.calibration_units_name,
-                }
-
+        return {
+            'controls_abundances_MEF': self.controls_abundances_MEF,
+            'calibration_units_name': self.calibration_units_name,
+        }
 
     def diagnostics(self, controls_masks, protein_names, channel_names, **kw):
 
@@ -200,7 +203,6 @@ class MEFBeadsCalibration(Task):
 
         self.plot_bead_peaks_diagnostics()
         self.plot_regressions()
-
 
     def process(self, abundances_mapped, **_):
         self.log.debug(f'Calibrating values to {self.calibration_units_name}')
@@ -288,6 +290,11 @@ class MEFBeadsCalibration(Task):
             self.beads_densities > self.density_threshold, np.maximum(w, 1e-9), 0
         )  # still some tiny weight when OOR
 
+        # w.shape is (BEADS, CHANNELS, RESOLUTION)
+
+        is_zero = np.sum(w, axis=2) == 0
+        w = np.where(is_zero[:, :, None], 1, w)
+
         self.weighted_densities = w
 
         xx = np.tile(x, (self.beads_densities.shape[0], self.beads_densities.shape[1], 1))
@@ -313,7 +320,6 @@ class MEFBeadsCalibration(Task):
             x, y, w, *xbounds, self.model_resolution, self.model_degree, endpoint=True
         )
         return params
-
 
     def fit_regressions(self, ignore_first_bead=True, **_):
         # we weight the points by how much they *don't* overlap
@@ -349,16 +355,13 @@ class MEFBeadsCalibration(Task):
                 cmap='RdYlGn',
             )
             x = np.linspace(
-                self.saturation_thresholds_tr[c, 0],
-                self.saturation_thresholds_tr[c, 1],
-                300
+                self.saturation_thresholds_tr[c, 0], self.saturation_thresholds_tr[c, 1], 300
             )
             y = utils.evaluate_stacked_poly(x, self.params[c])
             ax.plot(x, y, color='k', ls='--', alpha=0.75)
             ax.set_title(self.use_channels[c])
             ax.set_xlabel('AU')
             ax.set_ylabel('MEF')
-
 
     def plot_bead_peaks_diagnostics(self):
         """
@@ -456,10 +459,15 @@ class MEFBeadsCalibration(Task):
                 )
                 ax.set_ylim(0, 1.2)
                 ax.set_yticks([])
-                ax.set_xlim(self.peaks_min_x, self.peaks_max_x * 1.02)
-                xp10 = plots.powers_of_ten(self.itr(self.peaks_min_x), self.itr(self.peaks_max_x))
-                ax.set_xticks(self.tr(xp10))
-                ax.xaxis.set_major_formatter(plots.PowerFormatter(xp10, skip10=True))
+
+                tr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
+                    ax,
+                    [self.itr(self.peaks_min_x),
+                    self.itr(self.peaks_max_x * 1.02)],
+                    None,
+                    linthresh=self.log_poly_threshold,
+                    linscale=self.log_poly_scale,
+                )
 
                 title = f'{self.use_channels[c]}'
                 ax.set_ylabel(title)
@@ -478,7 +486,6 @@ class MEFBeadsCalibration(Task):
             ax.set_xticklabels(np.arange(nbeads))
             ax.set_yticklabels(np.arange(nbeads))
         axes[0].set_title("Bead overlap matrices")
-
 
     def plot_beads_after_correction(self):
         from matplotlib import cm
@@ -553,7 +560,13 @@ class MEFBeadsCalibration(Task):
                         color = 'r'
                         alpha = 0.35
                     ax.axhline(
-                        self.mef_tr[b, c], alpha=alpha, color=color, lw=1, dashes=(3, 3), xmin=0.5, xmax=1
+                        self.mef_tr[b, c],
+                        alpha=alpha,
+                        color=color,
+                        lw=1,
+                        dashes=(3, 3),
+                        xmin=0.5,
+                        xmax=1,
                     )
                     ax.text(
                         0.45,

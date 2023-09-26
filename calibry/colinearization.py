@@ -424,14 +424,12 @@ def find_best_linearization_path(
 import itertools
 
 
-@jit
-def logtransform(x, scale, offset):
-    return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
-
-
-@jit
-def inv_logtransform(x, scale, offset):
-    return jnp.exp(x / scale + jnp.log(offset)) - offset
+# @jit
+# def logtransform(x, scale, offset):
+    # return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
+# @jit
+# def inv_logtransform(x, scale, offset):
+    # return jnp.exp(x / scale + jnp.log(offset)) - offset
 
 
 class Colinearization(Task):
@@ -444,8 +442,8 @@ class Colinearization(Task):
         params=None,
         resample_N=50000,
         logspace=False,
-        LOG_RESCALE=1e3,
-        LOG_OFFSET=500,
+        log_poly_threshold=200,
+        log_poly_scale=0.3,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -456,8 +454,9 @@ class Colinearization(Task):
         self.transform_resolution = transform_resolution
         self.transform_degree = transform_degree
         if logspace:
-            self.tr = partial(logtransform, scale=LOG_RESCALE, offset=LOG_OFFSET)
-            self.itr = partial(inv_logtransform, scale=LOG_RESCALE, offset=LOG_OFFSET)
+            self.tr = lambda x: partial(utils.logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x+100)*100
+            self.itr = lambda x: partial(utils.inv_logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x/100)-100
+
         else:
             self.tr = lambda x: x
             self.itr = lambda x: x
@@ -606,7 +605,7 @@ class Colinearization(Task):
             self.params = self.find_linearization_params(channel_names)
 
         self.log.debug(f"Computing new controls values")
-        self.new_controls_values = self.process(controls_values)['abundances_AU']
+        self.new_controls_values = self.process(controls_values)['observations_raw']
         self.new_autofluorescence = utils.estimate_autofluorescence(
             self.new_controls_values, controls_masks
         )
@@ -673,10 +672,12 @@ class Colinearization(Task):
             ax.set_ylabel(channel_names[i] + "'")
         fig.tight_layout()
 
-    def process(self, abundances_AU, **kw):
+    def process(self, observations_raw, **kw):
         assert self.params is not None, "You need to run initialize() first"
-        x = self.compute_yprime_from_list(abundances_AU.T).T
-        return {'abundances_AU': x}
+        self.log.debug(f"Linearizing observations of shape {observations_raw.shape}")
+        x = self.compute_yprime_from_list(observations_raw.T).T
+        self.log.debug(f"Linearization done, output shape: {x.shape}")
+        return {'observations_raw': x}
 
 
 

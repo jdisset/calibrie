@@ -40,11 +40,14 @@ class Pipeline:
             self.log.debug(f"Initializing task {task.__class__.__name__}")
             self.context.update(task.initialize(**self.context, **kw))
 
-    def apply_all(self, observations):
-        with self.log.indent():
-            for task in self.tasks:
-                self.log.debug(f"Applying task {task.__class__.__name__}")
-                self.context.update(task.apply(observations, **self.context))
+    def apply_all(self, input):
+        self.context.update({'pipeline_input': input})
+        for task in self.tasks:
+            self.log.debug(f"Applying task {task.__class__.__name__}")
+            last_output = task.process(**self.context)
+            self.context.update(last_output)
+        # return first key of last output
+        return list(last_output.values())[0]
 
 
     def all_diagnostics(self):

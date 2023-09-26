@@ -102,8 +102,6 @@ def load_to_df(data, column_order=None):
 
 DEFAULT_LOG_RESCALE = 10
 DEFAULT_LOG_OFFSET = 400
-
-
 def logoffset(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
     return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
 def inv_logoffset(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
@@ -544,8 +542,8 @@ def regression(x, y, w, xbounds, resolution, degree, logspace=True, endpoint=Tru
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
-logtransform = partial(spline_biexponential, threshold=200, compression=0.4)
-inv_logtransform = partial(inverse_spline_biexponential, threshold=200, compression=0.4)
+logtransform = partial(spline_biexponential, threshold=100, compression=0.8)
+inv_logtransform = partial(inverse_spline_biexponential, threshold=100, compression=0.8)
 
 ### {{{           --     simple functions shared accross tasks     --
 

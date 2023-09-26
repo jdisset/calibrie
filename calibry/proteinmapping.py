@@ -20,7 +20,7 @@ class ProteinMapping(Task):
         logspace=True,
         model_resolution=10,
         model_degree=2,
-        model_quantile_bounds=(0.1, 0.95),
+        model_quantile_bounds=(0.05, 0.999),
     ):
         self.reference_protein = reference_protein.upper()
         self.logspace = logspace
@@ -56,10 +56,6 @@ class ProteinMapping(Task):
             otherp = self.allprt_abundances[:, i]
             xbounds = np.quantile(otherp, np.array(self.model_quantile_bounds))
             w = np.ones_like(otherp)
-            # w[otherp < xbounds[0]] = 0
-            # w[otherp > xbounds[1]] = 0
-            # w[ref < refbounds[0]] = 0
-            # w[ref > refbounds[1]] = 0
             self.params.append(
                 self.regression(
                     otherp,
@@ -105,12 +101,15 @@ class ProteinMapping(Task):
         )
         f.suptitle(f'Unmixing after protein mapping to {self.reference_protein}')
 
-    def plot_mapping(self, protein_names, nbins=300, logspace=True, **kw):
+    def plot_mapping(self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None,**kw):
         nprots = self.allprt_abundances.shape[1]
         fig, axes = plt.subplots(1, nprots - 1, figsize=(5 * (nprots - 1), 5))
+        if nprots == 2:
+            axes = [axes]
         # scatter each original abundances and plot regression line
         refx = self.allprt_abundances[:, self.reference_protid]
-        target_bounds = np.quantile(refx, np.array([0.0001, 0.9999]))
+        if target_bounds is None:
+            target_bounds = np.quantile(refx, np.array([0.0001, 1]))
         # log_target_bounds = self.logt(target_bounds) + np.array([-10, 10])
         j = 0
 
@@ -119,13 +118,15 @@ class ProteinMapping(Task):
                 continue
             ax = axes[j]
             otherx = self.allprt_abundances[:, i]
-            other_bounds = np.quantile(otherx, [0.001, 0.999])
+            if other_bounds is None:
+                other_bounds = np.quantile(otherx, [0.001, 1])
             log_other_bounds = self.logt(other_bounds) + np.array([-10, 10])
 
             if logspace:
                 axtr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(ax, other_bounds, target_bounds)
             else:
                 axtr = lambda x: x
+                invtr = lambda x: x
                 xlims_tr = other_bounds
                 ylims_tr = target_bounds
 
