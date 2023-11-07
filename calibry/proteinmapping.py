@@ -84,7 +84,7 @@ class ProteinMapping(Task):
 
     def diagnostics(self, controls_masks, protein_names, channel_names, nbins=300, **kw):
 
-        self.plot_mapping(protein_names, nbins=nbins, **kw)
+        fmap, _ = self.plot_mapping(protein_names, nbins=nbins, **kw)
 
         controls_abundances, std_models = utils.generate_controls_dict(
             self.controls_abundances_mapped,
@@ -101,7 +101,17 @@ class ProteinMapping(Task):
         )
         f.suptitle(f'Unmixing after protein mapping to {self.reference_protein}')
 
-    def plot_mapping(self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None,**kw):
+        classname = self.__class__.__name__
+        return {
+            f'diagnostics_{classname}': {
+                'mapping_regression': fmap,
+                f'unmixing_to_{self.reference_protein}_AU': f,
+            }
+        }
+
+    def plot_mapping(
+        self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None, **kw
+    ):
         nprots = self.allprt_abundances.shape[1]
         fig, axes = plt.subplots(1, nprots - 1, figsize=(5 * (nprots - 1), 5))
         if nprots == 2:
@@ -123,15 +133,18 @@ class ProteinMapping(Task):
             log_other_bounds = self.logt(other_bounds) + np.array([-10, 10])
 
             if logspace:
-                axtr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(ax, other_bounds, target_bounds)
+                axtr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
+                    ax, other_bounds, target_bounds
+                )
             else:
                 axtr = lambda x: x
                 invtr = lambda x: x
                 xlims_tr = other_bounds
                 ylims_tr = target_bounds
 
-
-            plots.density_histogram2d(ax, axtr(otherx), axtr(refx), xlims_tr, ylims_tr, nbins, noise_smooth=0.3)
+            plots.density_histogram2d(
+                ax, axtr(otherx), axtr(refx), xlims_tr, ylims_tr, nbins, noise_smooth=0.3
+            )
             # ax.scatter(tr(self.logt(otherx)), tr(self.logt(refx)), s=1, alpha=0.1)
             ax.set_xlim(*xlims_tr)
             ax.set_ylim(*ylims_tr)
@@ -170,4 +183,3 @@ class ProteinMapping(Task):
 
     def apply_prtmap(self, X, params):
         return np.array([self.apply_reg(x, p) for x, p in zip(X.T, params)]).T
-

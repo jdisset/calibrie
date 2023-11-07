@@ -3,7 +3,6 @@ from rich.logging import RichHandler
 
 from typing import List, Dict, Any, Optional, Union
 
-
 class Task:
     def __init__(self, **kwargs):
         self.params = kwargs

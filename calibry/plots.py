@@ -186,7 +186,7 @@ class CustomLocator(ticker.Locator):
         # Log ticks for [thresh, vmax] and [-vmin, -thresh]
         log_ticks_positive = np.array([])
         if vmax >= self.thresh:
-            log_ticks_positive = ticker.LogLocator(base=self.base).tick_values(1, vmax)
+            log_ticks_positive = ticker.LogLocator(base=self.base).tick_vaues(1, vmax)
             log_ticks_positive = log_ticks_positive[log_ticks_positive >= self.thresh]
 
         log_ticks_negative = np.array([])

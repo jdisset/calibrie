@@ -66,6 +66,7 @@ class MEFBeadsCalibration(Task):
         beads_mef_values: Dict[str, List[float]] = MEF_VALUES_SPHEROTECH_RCP_30_5a,
         channel_units: Dict[str, str] = FORTESSA_CHANNELS_UNITS,
         use_channels: List[str] = None,
+        ignore_channels_with_missing_units: bool = False,
         density_resolution: int = 1000,
         density_bw_method=0.2,
         density_threshold: float = 0.25,
@@ -89,14 +90,11 @@ class MEFBeadsCalibration(Task):
         self.beads_data = beads_data
         self.beads_mef_values = utils.escape(beads_mef_values)
         self.channel_units = utils.escape(channel_units)
+        self.ignore_channels_with_missing_units = ignore_channels_with_missing_units
         self.density_resolution = density_resolution
         self.density_bw_method = density_bw_method
         self.density_threshold = density_threshold
         self.resample_observations_to = resample_observations_to
-        if use_channels is not None:
-            raise NotImplementedError(
-                'MEF\'s use_channels is not implemented yet, issues with colinearizer'
-            )
         self.use_channels = utils.escape(use_channels)
         self.model_resolution = model_resolution
         self.model_degree = model_degree
@@ -132,7 +130,7 @@ class MEFBeadsCalibration(Task):
             raise ValueError(f'{self.calibration_channel_name} has no associated units')
 
         self.log.debug(
-            f'Calibrating with {self.calibration_channel_name} from {reference_protein_name}'
+            f'Calibrating with channel {self.calibration_channel_name} and protein {reference_protein_name}'
         )
 
         if self.calibration_channel_name not in channel_names:
@@ -142,14 +140,42 @@ class MEFBeadsCalibration(Task):
                 'Calibration channel not found in the channels used for beads (use_channels)'
             )
 
-        self.calibration_channel_id = self.use_channels.index(self.calibration_channel_name)
         self.calibration_units_name = self.channel_units[self.calibration_channel_name]
         if self.calibration_units_name not in self.beads_mef_values:
             raise ValueError(f'No beads values for {self.calibration_units_name}')
 
-        self.beads_data_array = utils.load_to_df(self.beads_data, self.use_channels).values
+        # check that we have beads mef_values for all the channels we use
+        remove_chans = []
+        for c in self.use_channels:
+            if c not in self.channel_units:
+                if not self.ignore_channels_with_missing_units:
+                    raise ValueError(
+                        f"""No MEF units for {c}.
+                        Pass 'ignore_channels_with_missing_units=True' to ignore"""
+                    )
+                else:
+                    remove_chans.append(c)
+            elif self.channel_units[c] not in self.beads_mef_values:
+                raise ValueError(f'No unit values for channel {c} ({self.channel_units[c]})')
+
+        if len(remove_chans) > 0:
+            self.log.debug(f'No beads units for {remove_chans}. Removing them from use_channels')
+            self.use_channels = [c for c in self.use_channels if c not in remove_chans]
+
+        all_chans = list(set(channel_names + self.use_channels))
+        self.beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
+
         if colinearizer is not None:
-            self.beads_data_array = list(colinearizer.process(self.beads_data_array).values())[0]
+            # we need to get the pipeline channels if we want to use the colinearizer
+            chan_ids = [all_chans.index(c) for c in channel_names]
+            self.beads_data_array[:, chan_ids] = colinearizer.process(
+                self.beads_data_array[:, chan_ids]
+            )['observations_raw']
+
+        # now only take the channels we use
+        self.beads_data_array = self.beads_data_array[
+            :, [all_chans.index(c) for c in self.use_channels]
+        ]
 
         self.beads_mef_array = np.array(
             [self.beads_mef_values[self.channel_units[c]] for c in self.use_channels]
@@ -164,6 +190,8 @@ class MEFBeadsCalibration(Task):
                 self.saturation_thresholds.append(
                     np.quantile(self.beads_data_array[:, i], [0.001, 0.999])
                 )
+
+        self.calibration_channel_id = self.use_channels.index(self.calibration_channel_name)
 
         self.saturation_thresholds = np.array(self.saturation_thresholds)
 
@@ -185,7 +213,6 @@ class MEFBeadsCalibration(Task):
         }
 
     def diagnostics(self, controls_masks, protein_names, channel_names, **kw):
-
         controls_abundances, std_models = utils.generate_controls_dict(
             self.controls_abundances_MEF,
             controls_masks,
@@ -201,8 +228,17 @@ class MEFBeadsCalibration(Task):
         )
         f.suptitle(f'Unmixing after calibration to {self.calibration_units_name}', y=1.05)
 
-        self.plot_bead_peaks_diagnostics()
-        self.plot_regressions()
+        peakfig = self.plot_bead_peaks_diagnostics()
+        regfig = self.plot_regressions()
+
+        classname = self.__class__.__name__
+        return {
+            f'diagnostics_{classname}': {
+                'mefcontrols': f,
+                'peak_id': peakfig,
+                'channel_regression': regfig,
+            }
+        }
 
     def process(self, abundances_mapped, **_):
         self.log.debug(f'Calibrating values to {self.calibration_units_name}')
@@ -235,6 +271,8 @@ class MEFBeadsCalibration(Task):
         self.obs_tr = self.tr(beads_observations)
         self.mef_tr = self.tr(beads_mef_values)
         self.saturation_thresholds_tr = self.tr(self.saturation_thresholds)
+
+        self.log.debug(f'Computing votes')
 
         @jit
         @partial(vmap, in_axes=(1, 1))
@@ -269,6 +307,7 @@ class MEFBeadsCalibration(Task):
         obs = self.obs_tr + np.random.normal(0, noise_std, self.obs_tr.shape)
 
         # Now we can compute the densities for each bead in each channel in order to locate the peaks
+        self.log.debug(f'Computing densities')
         x = np.linspace(self.peaks_min_x, self.peaks_max_x, self.density_resolution)
         w_kde = lambda s, w: gaussian_kde(s, weights=w, bw_method=self.density_bw_method)(x)
         densities = jit(vmap(vmap(w_kde, in_axes=(None, 1)), in_axes=(1, None)))(obs, self.vmat)
@@ -308,6 +347,8 @@ class MEFBeadsCalibration(Task):
                 return jnp.clip(s / jnp.minimum(jnp.sum(x, axis=1), jnp.sum(y, axis=1)), 0, 1)
 
             return vmap(vmap(overlap_1v1, (0, None)), (None, 0))(X, X)
+
+        self.log.debug(f'Computing overlap matrix')
 
         self.overlap = overlap(self.weighted_densities)
 
@@ -362,6 +403,7 @@ class MEFBeadsCalibration(Task):
             ax.set_title(self.use_channels[c])
             ax.set_xlabel('AU')
             ax.set_ylabel('MEF')
+        return fig
 
     def plot_bead_peaks_diagnostics(self):
         """
@@ -462,8 +504,7 @@ class MEFBeadsCalibration(Task):
 
                 tr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
                     ax,
-                    [self.itr(self.peaks_min_x),
-                    self.itr(self.peaks_max_x * 1.02)],
+                    [self.itr(self.peaks_min_x), self.itr(self.peaks_max_x * 1.02)],
                     None,
                     linthresh=self.log_poly_threshold,
                     linscale=self.log_poly_scale,
@@ -487,6 +528,8 @@ class MEFBeadsCalibration(Task):
             ax.set_yticklabels(np.arange(nbeads))
         axes[0].set_title("Bead overlap matrices")
 
+        return mainfig
+
     def plot_beads_after_correction(self):
         from matplotlib import cm
 
@@ -501,6 +544,7 @@ class MEFBeadsCalibration(Task):
                 for o, p in zip(self.bead_peak_locations.T, self.params)
             ]
         ).T
+
         for c in range(NCHAN):
             ax = axes[c]
             chan = self.use_channels[c]
@@ -611,27 +655,4 @@ class MEFBeadsCalibration(Task):
                 )
 
         fig.tight_layout()
-
-
-# def plot_beads_diagnostics(self):
-
-# plot_bead_peaks_diagnostics(
-# self.__log_beads_peaks,
-# self.__beads_densities,
-# self.__beads_vmat,
-# self.__log_beads_data,
-# self.beads_channel_order,
-# )
-
-# plot_beads_after_correction(
-# self.beads_transform,
-# self.__log_beads_peaks,
-# self.__log_beads_mef,
-# self.__log_beads_data,
-# self.beads_channel_order,
-# self.channel_to_unit,
-# title="""Beads-based MEF calibration
-# right side shows beads intensities in their respective MEF units
-# left side shows the real beads data after calibration\n\n""",
-# )
-# plt.show()
+        return fig

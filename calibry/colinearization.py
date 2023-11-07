@@ -376,6 +376,7 @@ def find_best_linearization_path(
     best_range_prot_per_channel,
     range_threshold,
     indep_power=2,
+    exclude_channels=None
 ):
 
     # Completely independent groups of channels are not much of an issue, (even though not ideal).
@@ -415,7 +416,10 @@ def find_best_linearization_path(
 
         return [grps[best_score]] + next_groups, scores[best_score]
 
-    return _impl(np.arange(nchannels), [], [])
+    start_chans = np.arange(nchannels)
+    if exclude_channels is not None:
+        start_chans = np.setdiff1d(start_chans, exclude_channels)
+    return _impl(start_chans, [], [])
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -444,6 +448,7 @@ class Colinearization(Task):
         logspace=False,
         log_poly_threshold=200,
         log_poly_scale=0.3,
+        exclude_channels=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -453,6 +458,7 @@ class Colinearization(Task):
         self.information_range_threshold = information_range_threshold
         self.transform_resolution = transform_resolution
         self.transform_degree = transform_degree
+        self.exclude_channels = exclude_channels
         if logspace:
             self.tr = lambda x: partial(utils.logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x+100)*100
             self.itr = lambda x: partial(utils.inv_logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x/100)-100
@@ -590,12 +596,18 @@ class Colinearization(Task):
 
         if self.linearization_path is None and self.params is None:
             self.log.debug(f"Looking for a good linearization path")
+
+            exclude_list = None
+            if self.exclude_channels is not None:
+                exclude_list = [channel_names.index(c) for c in self.exclude_channels]
+
             self.linearization_path, _ = find_best_linearization_path(
                 nchannels,
                 self.absolute_ranges,
                 self.relative_ranges,
                 self.best_range_prot_per_channel,
                 self.information_range_threshold,
+                exclude_channels = exclude_list,
             )
 
         if self.params is None:

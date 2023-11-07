@@ -1,7 +1,0 @@
-
-
-
-FORTESSA_MAX_V = 2**18 - 1
-
-FORTESSA_OFFSET = 200
-
