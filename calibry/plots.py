@@ -678,6 +678,7 @@ def unmixing_plot(
     nbins=500,
     noise_smooth=0.25,
     density_lims=(0.01, 1.5),
+    draw_acceptable_std_line_at=2,
     **_,
 ):
     # adding the 'all' to protein names:
@@ -767,6 +768,21 @@ def unmixing_plot(
                     shading='auto',
                     zorder=-1,
                 )
+                if draw_acceptable_std_line_at is not None:
+                    cnt = ax.contour(
+                        mx,
+                        my,
+                        mz,
+                        levels=[draw_acceptable_std_line_at],
+                        colors='k',
+                        vmin=std_lims[0],
+                        vmax=std_lims[1],
+                        linestyles='--',
+                        linewidths=1,
+                        zorder=0,
+                    )
+                    ax.clabel(cnt, inline=True, fontsize=8, fmt='%.1f')
+
 
             ax.set_ylabel(f'{ctrl_name}')
             ax.set_xlabel(f'{prot_name}')

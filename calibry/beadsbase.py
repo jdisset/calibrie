@@ -59,7 +59,7 @@ FORTESSA_CHANNELS_UNITS = {
 }
 
 
-class MEFBeadsCalibration(Task):
+class BeadsBase(Task):
     def __init__(
         self,
         beads_data,
@@ -73,8 +73,6 @@ class MEFBeadsCalibration(Task):
         resample_observations_to: int = 30000,
         log_poly_threshold=200,
         log_poly_scale=0.5,
-        model_resolution: int = 7,
-        model_degree: int = 1,
     ):
         """
         beads_data: np.ndarray - array of shape (n_events, n_channels) containing the beads data
@@ -95,8 +93,6 @@ class MEFBeadsCalibration(Task):
         self.relative_density_threshold = relative_density_threshold
         self.resample_observations_to = resample_observations_to
         self.use_channels = utils.escape(use_channels)
-        self.model_resolution = model_resolution
-        self.model_degree = model_degree
         self.tr = partial(
             utils.logtransform, threshold=log_poly_threshold, compression=log_poly_scale, base=10
         )
@@ -113,36 +109,9 @@ class MEFBeadsCalibration(Task):
         self,
         channel_names,
         saturation_thresholds,
-        reference_channels,
-        reference_protein_name,
-        reference_protein_id,
-        controls_abundances_mapped,
         colinearizer=None,
         **_,
     ):
-
-        self.calibration_channel_name = channel_names[reference_channels[reference_protein_id]]
-        if self.use_channels is None:
-            self.use_channels = channel_names
-
-        if self.channel_units[self.calibration_channel_name] is None:
-            raise ValueError(f'{self.calibration_channel_name} has no associated units')
-
-        self.log.debug(
-            f'Calibrating with channel {self.calibration_channel_name} and protein {reference_protein_name}'
-        )
-
-        if self.calibration_channel_name not in channel_names:
-            raise ValueError('Calibration channel not found in the main channels')
-        if self.calibration_channel_name not in self.use_channels:
-            raise ValueError(
-                'Calibration channel not found in the channels used for beads (use_channels)'
-            )
-
-        self.calibration_units_name = self.channel_units[self.calibration_channel_name]
-        if self.calibration_units_name not in self.beads_mef_values:
-            raise ValueError(f'No beads values for {self.calibration_units_name}')
-
         # check that we have beads mef_values for all the channels we use
         remove_chans = []
         for c in self.use_channels:
@@ -189,24 +158,14 @@ class MEFBeadsCalibration(Task):
                 self.saturation_thresholds.append(
                     np.quantile(self.beads_data_array[:, i], [0.001, 0.999])
                 )
-
-        self.calibration_channel_id = self.use_channels.index(self.calibration_channel_name)
-
         self.saturation_thresholds = np.array(self.saturation_thresholds)
 
-        self.log.debug(f'Calibrated abundances will be expressed in {self.calibration_units_name}')
 
         self.log.debug(f'Computing beads locations')
         self.compute_peaks(self.beads_data_array, self.beads_mef_array)
-        self.log.debug(f'Locations: {self.bead_peak_locations}')
+        self.log.debug(f'Beads are at (in AU, per channel): {self.bead_peak_locations}')
         self.fit_regressions()
-        self.log.debug(f'Applying calibration to controls')
-        self.controls_abundances_MEF = self.process(controls_abundances_mapped)['abundances_MEF']
 
-        return {
-            'controls_abundances_MEF': self.controls_abundances_MEF,
-            'calibration_units_name': self.calibration_units_name,
-        }
 
     def diagnostics(self, controls_masks, protein_names, channel_names, **kw):
         controls_abundances, std_models = utils.generate_controls_dict(
@@ -236,13 +195,8 @@ class MEFBeadsCalibration(Task):
             }
         }
 
-    def process(self, abundances_mapped, **_):
-        self.log.debug(f'Calibrating values to {self.calibration_units_name}')
-        params = self.params[self.calibration_channel_id]
-        tr_abundances = self.tr(abundances_mapped)
-        tr_calibrated = vmap(utils.evaluate_stacked_poly, in_axes=(1, None))(tr_abundances, params)
-        abundances_MEF = self.itr(tr_calibrated).T
-        return {'abundances_MEF': abundances_MEF}
+    def process(self, *__, **_):
+        pass
 
     def compute_peaks(
         self,

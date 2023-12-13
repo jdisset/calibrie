@@ -77,6 +77,7 @@ class LinearCompensation(Task):
         self,
         mode='WLR',
         use_matrix=None,
+        matrix_corrections=None,
         use_inverse_variance_estimate_weights=True,
         variance_weight_cutoff=100,
         channel_weight_attenuation_power=2.0,
@@ -87,6 +88,7 @@ class LinearCompensation(Task):
 
         self.mode = mode
         self.use_matrix = use_matrix
+        self.matrix_corrections = matrix_corrections
         self.use_inverse_variance_estimate_weights = use_inverse_variance_estimate_weights
         self.variance_weight_cutoff = variance_weight_cutoff
         self.channel_weight_attenuation_power = channel_weight_attenuation_power
@@ -125,6 +127,19 @@ class LinearCompensation(Task):
 
         else:
             raise ValueError(f"Unknown solver mode {self.mode}")
+
+        self.spillover_matrix = np.array(self.spillover_matrix)
+
+        if self.matrix_corrections is not None:
+            for (p, c), v in self.matrix_corrections.items():
+                i = self.protein_names.index(p)
+                j = self.channel_names.index(c)
+                prev_value = self.spillover_matrix[i, j]
+                self.spillover_matrix[i, j] *= v
+                self.log.debug(
+                    f"""Correcting spillover matrix for ({p}, {c}):
+                    matrix[{i}, {j}] *= {v} (prev value: {prev_value})"""
+                )
 
         self.channel_weights = self.compute_channel_weights(controls_values, controls_masks)
         self.log.debug(f"Computed channel weights:\n{self.channel_weights}")
