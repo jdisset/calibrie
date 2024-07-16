@@ -1,4 +1,5 @@
 from joblib import Memory
+
 cachedir = '/tmp/'
 memory = Memory(cachedir, verbose=0)
 from jaxopt import GaussNewton
@@ -177,7 +178,6 @@ def find_colinearization_sequence(
     best_range_prot_per_channel: np.ndarray,
     range_threshold: float,
 ):
-
     """
     Finds a sequence of linearization steps.
     A linearization step is a list of (source channel, destination channel, quality) tuples
@@ -376,7 +376,7 @@ def find_best_linearization_path(
     best_range_prot_per_channel,
     range_threshold,
     indep_power=2,
-    exclude_channels=None
+    exclude_channels=None,
 ):
 
     # Completely independent groups of channels are not much of an issue, (even though not ideal).
@@ -430,47 +430,55 @@ import itertools
 
 # @jit
 # def logtransform(x, scale, offset):
-    # return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
+# return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
 # @jit
 # def inv_logtransform(x, scale, offset):
-    # return jnp.exp(x / scale + jnp.log(offset)) - offset
+# return jnp.exp(x / scale + jnp.log(offset)) - offset
 
 
 class Colinearization(Task):
-    def __init__(
-        self,
-        information_range_threshold=0.02,
-        transform_resolution=7,
-        transform_degree=2,
-        linearization_path=None,
-        params=None,
-        resample_N=50000,
-        logspace=False,
-        log_poly_threshold=200,
-        log_poly_scale=0.3,
-        exclude_channels=None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.params = params
-        self.linearization_path = linearization_path
-        self.resample_N = resample_N
-        self.information_range_threshold = information_range_threshold
-        self.transform_resolution = transform_resolution
-        self.transform_degree = transform_degree
-        self.exclude_channels = exclude_channels
-        if logspace:
-            self.tr = lambda x: partial(utils.logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x+100)*100
-            self.itr = lambda x: partial(utils.inv_logtransform, threshold=log_poly_threshold, compression=log_poly_scale)(x/100)-100
 
+    # switch to pydantic model
+
+    information_range_threshold: float = 0.02
+    transform_resolution: int = 7
+    transform_degree: int = 2
+    resample_N: int = 50000
+    logspace: bool = False
+    log_poly_threshold: int = 200
+    log_poly_scale: float = 0.3
+    exclude_channels: List[str] = []
+
+    _linearization_path: List[List[np.ndarray]] = []
+
+    def model_post_init(self, *args, **kwargs):
+        super().model_post_init(*args, **kwargs)
+
+        if self.logspace:
+            self._tr = (
+                lambda x: partial(
+                    utils.logtransform,
+                    threshold=self.log_poly_threshold,
+                    compression=self.log_poly_scale,
+                )(x + 100)
+                * 100
+            )
+            self._itr = (
+                lambda x: partial(
+                    utils.inv_logtransform,
+                    threshold=self.log_poly_threshold,
+                    compression=self.log_poly_scale,
+                )(x / 100)
+                - 100
+            )
         else:
-            self.tr = lambda x: x
-            self.itr = lambda x: x
+            self._tr = lambda x: x
+            self._itr = lambda x: x
 
     @partial(jax.jit, static_argnums=(0,))
-    def regression(self, x, y, w, xbounds):
-        xbounds = self.tr(xbounds)
-        x_tr, y_tr = self.tr(x), self.tr(y)
+    def _regression(self, x, y, w, xbounds):
+        xbounds = self._tr(xbounds)
+        x_tr, y_tr = self._tr(x), self._tr(y)
         params = utils.fit_stacked_poly_uniform_spacing(
             x_tr, y_tr, w, *xbounds, self.transform_resolution, self.transform_degree
         )
@@ -479,33 +487,33 @@ class Colinearization(Task):
     def find_linearization_params(
         self, channel_names, compute_coef_at_percentile=80, progress=False
     ):
-        assert self.linearization_path is not None
+        assert self._linearization_path is not None
 
         params = [
-            self.generate_single_identity_transform(yb)
-            for yb in self.corrected_saturation_thresholds
+            self._generate_single_identity_transform(yb)
+            for yb in self._corrected_saturation_thresholds
         ]
 
-        Ysingle_prime = self.singleprt_observations
+        Ysingle_prime = self._singleptr_observations
 
         total_needed_linearizations = sum(
-            len(extract_linearized(p)) for p in self.linearization_path
+            len(extract_linearized(p)) for p in self._linearization_path
         )
 
         if progress:
             pbar = tqdm(total=total_needed_linearizations)
             msg = 'Linearization'
 
-        for group in self.linearization_path:
+        for group in self._linearization_path:
             for step in group:
                 for src_chan, dest_chan, _ in step.astype(int):
                     if src_chan != dest_chan:
-                        prot = self.best_range_prot_per_channel[src_chan]
-                        x = self.singleprt_observations[prot, :, src_chan]
+                        prot = self._best_range_prot_per_channel[src_chan]
+                        x = self._singleptr_observations[prot, :, src_chan]
                         y = Ysingle_prime[prot, :, dest_chan]
                         w = (
-                            self.not_saturated[prot, :, src_chan]
-                            * self.not_saturated[prot, :, dest_chan]
+                            self._not_saturated[prot, :, src_chan]
+                            * self._not_saturated[prot, :, dest_chan]
                         )
                         # compute rough coefficient to express y as x * coef
                         percentile_bounds = np.percentile(
@@ -515,43 +523,42 @@ class Colinearization(Task):
                         matching_x = x[w][inbounds_x]
                         matching_y = y[w][inbounds_x]
                         coef = np.nanmean(matching_x / matching_y)
-                        xbounds = self.corrected_saturation_thresholds[src_chan]
-                        params[src_chan] = self.regression(x, y * coef, w, xbounds)
+                        xbounds = self._corrected_saturation_thresholds[src_chan]
+                        params[src_chan] = self._regression(x, y * coef, w, xbounds)
                         rmse_before = np.sqrt(
                             np.nanmean((Ysingle_prime[prot, :, src_chan] - y) ** 2)
                         )
-                        Ysingle_prime[prot, :, src_chan] = self.transform_chan(x, params[src_chan])
+                        Ysingle_prime[prot, :, src_chan] = self._transform_chan(x, params[src_chan])
                         rmse_after = np.sqrt(
                             np.nanmean((Ysingle_prime[prot, :, src_chan] - y * coef) ** 2)
                         )
                         msg = f'Linearizing {channel_names[src_chan]} -> {channel_names[dest_chan]}: {rmse_before:.2f} -> {rmse_after:.2f}'
-                        self.log.debug(msg)
+                        self._log.debug(msg)
                     if progress:
                         pbar.set_description(msg)
                         pbar.update(1)
         return params
 
-    def initialize(
-        self,
-        controls_values,
-        controls_masks,
-        channel_names,
-        protein_names,
-        reference_channels,
-        **_,
-    ):
+    def initialize(self, ctx):
+
+        controls_values = self.get_ctx(ctx, 'controls_values')
+        controls_masks = self.get_ctx(ctx, 'controls_masks')
+        channel_names = self.get_ctx(ctx, 'channel_names')
+        protein_names = self.get_ctx(ctx, 'protein_names')
+        reference_channels = self.get_ctx(ctx, 'reference_channels')
+
         t0 = time.time()
 
-        self.autofluorescence = utils.estimate_autofluorescence(controls_values, controls_masks)
-        self.corrected_controls = controls_values - self.autofluorescence
-        self.corrected_saturation_thresholds = utils.estimate_saturation_thresholds(
-            self.corrected_controls
+        autofluorescence = utils.estimate_autofluorescence(controls_values, controls_masks)
+        corrected_controls = controls_values - autofluorescence
+        self._corrected_saturation_thresholds = utils.estimate_saturation_thresholds(
+            corrected_controls
         )
 
-        self.log.debug(f"Resampling observations for linearization")
+        self._log.debug(f"Resampling observations for linearization")
         # let's resample the single prot ctrls and put them all in a single array
-        self.singleprt_observations = resampled_singleprt_ctrls(
-            self.corrected_controls,
+        self._singleptr_observations = resampled_singleprt_ctrls(
+            corrected_controls,
             protein_names,
             controls_masks,
             reference_channels,
@@ -559,88 +566,91 @@ class Colinearization(Task):
             npartitions=0,
         )
 
-        assert self.singleprt_observations.shape == (
+        assert self._singleptr_observations.shape == (
             len(protein_names),
             self.resample_N,
             len(channel_names),
-        ), f"{self.singleprt_observations.shape} != {(len(protein_names), self.resample_N, len(channel_names))}"
+        ), f"{self._singleptr_observations.shape} != {(len(protein_names), self.resample_N, len(channel_names))}"
 
         # null_observations is the array of unstained cells observations
-        self.null_observations = self.corrected_controls[np.all(controls_masks == 0, axis=1)]
+        self._null_observations = corrected_controls[np.all(controls_masks == 0, axis=1)]
 
-        self.not_saturated = (
-            self.singleprt_observations > self.corrected_saturation_thresholds[:, 0]
-        ) & (self.singleprt_observations < self.corrected_saturation_thresholds[:, 1])
+        self._not_saturated = (
+            self._singleptr_observations > self._corrected_saturation_thresholds[:, 0]
+        ) & (self._singleptr_observations < self._corrected_saturation_thresholds[:, 1])
 
         # we need to know the range of values for each protein in each channel for 2 reasons:
         # - knowing how much of the pmt should and can be linearized
         # - as a proxy for the amount of information in each channel (the more the better)
-        self.absolute_ranges = np.subtract(
-            *np.quantile(self.singleprt_observations, [0.999, 0.001], axis=1)
+        self._absolute_ranges = np.subtract(
+            *np.quantile(self._singleptr_observations, [0.999, 0.001], axis=1)
         )
 
         # the relative range is the range of values relative to the noise of the null (unstainde) observations.
         # it should be a better measure of information than just the pure absolute ranges
-        self.relative_ranges = self.absolute_ranges / self.null_observations.std(axis=0)[None, :]
-        self.unsaturated_proportion = np.mean(self.not_saturated, axis=1)
+        self._relative_ranges = self._absolute_ranges / self._null_observations.std(axis=0)[None, :]
+        self._unsaturated_proportion = np.mean(self._not_saturated, axis=1)
 
         # pick the highest range
-        self.biggest_range_value_per_channel = np.max(self.absolute_ranges, axis=0)
+        self._biggest_range_value_per_channel = np.max(self._absolute_ranges, axis=0)
         # now to find the actual "best", we pick the prot with the least amount of saturation that's still within 0.1% of the max range
-        self.acceptable_range = self.absolute_ranges > 0.999 * self.biggest_range_value_per_channel
-        self.best_range_prot_per_channel = np.argmax(
-            self.acceptable_range * self.unsaturated_proportion, axis=0
+        self._acceptable_range = (
+            self._absolute_ranges > 0.999 * self._biggest_range_value_per_channel
+        )
+        self._best_range_prot_per_channel = np.argmax(
+            self._acceptable_range * self._unsaturated_proportion, axis=0
         )
 
         nchannels, nproteins = len(channel_names), len(protein_names)
 
-        if self.linearization_path is None and self.params is None:
-            self.log.debug(f"Looking for a good linearization path")
+        if self._linearization_path is None and self.params is None:
+            self._log.debug(f"Looking for a good linearization path")
 
             exclude_list = None
             if self.exclude_channels is not None:
                 exclude_list = [channel_names.index(c) for c in self.exclude_channels]
 
-            self.linearization_path, _ = find_best_linearization_path(
+            self._linearization_path, _ = find_best_linearization_path(
                 nchannels,
-                self.absolute_ranges,
-                self.relative_ranges,
-                self.best_range_prot_per_channel,
+                self._absolute_ranges,
+                self._relative_ranges,
+                self._best_range_prot_per_channel,
                 self.information_range_threshold,
-                exclude_channels = exclude_list,
+                exclude_channels=exclude_list,
             )
 
         if self.params is None:
-            self.log.debug("Using linearization plan:")
-            self.log.debug(self.linearization_path)
-            self.log.debug(f"Computing linearization params")
+            self._log.debug("Using linearization plan:")
+            self._log.debug(self._linearization_path)
+            self._log.debug(f"Computing linearization params")
             self.params = self.find_linearization_params(channel_names)
 
-        self.log.debug(f"Computing new controls values")
-        self.new_controls_values = self.process(controls_values)['observations_raw']
-        self.new_autofluorescence = utils.estimate_autofluorescence(
-            self.new_controls_values, controls_masks
+        self._log.debug(f"Computing new controls values")
+        self._new_controls_values = self.process({'observations_raw': controls_values})[
+            'observations_raw'
+        ]
+        self._new_autofluorescence = utils.estimate_autofluorescence(
+            self._new_controls_values, controls_masks
         )
-        self.new_saturation_thresholds = utils.estimate_saturation_thresholds(
-            self.new_controls_values
+        self._new_saturation_thresholds = utils.estimate_saturation_thresholds(
+            self._new_controls_values
         )
 
-
-        self.log.debug(f"Linearization initialization done in {time.time() - t0:.1f}s")
-        self.log.debug(f"newcontrols_values shape: {self.new_controls_values.shape}")
+        self._log.debug(f"Linearization initialization done in {time.time() - t0:.1f}s")
+        self._log.debug(f"newcontrols_values shape: {self._new_controls_values.shape}")
 
         return {
-            'controls_values': self.new_controls_values,
-            'autofluorescence': self.new_autofluorescence,
-            'saturation_thresholds': self.new_saturation_thresholds,
-            'linearization_path': self.linearization_path,
+            'controls_values': self._new_controls_values,
+            'autofluorescence': self._new_autofluorescence,
+            'saturation_thresholds': self._new_saturation_thresholds,
+            'linearization_path': self._linearization_path,
             'linearization_params': self.params,
             'colinearizer': self,
         }
 
     @partial(jit, static_argnums=(0,))
-    def generate_single_identity_transform(self, xbounds):
-        xbounds = self.tr(xbounds)
+    def _generate_single_identity_transform(self, xbounds):
+        xbounds = self._tr(xbounds)
         spacing = (xbounds[1] - xbounds[0]) / self.transform_resolution
         mticks = jnp.linspace(*xbounds, self.transform_resolution, endpoint=False) + spacing / 2
         stds = jnp.ones_like(mticks) * spacing
@@ -650,29 +660,35 @@ class Colinearization(Task):
         return coeffs, mticks, stds
 
     @partial(jit, static_argnums=(0,))
-    def generate_identity_transforms(self, saturation_thresholds):
-        return vmap(self.generate_single_identity_transform)(saturation_thresholds)
+    def _generate_identity_transforms(self, saturation_thresholds):
+        return vmap(self._generate_single_identity_transform)(saturation_thresholds)
 
     @partial(jit, static_argnums=(0,))
-    def transform_chan(self, y, t):
-        return self.itr(utils.evaluate_stacked_poly(self.tr(y), t))
+    def _transform_chan(self, y, t):
+        return self._itr(utils.evaluate_stacked_poly(self._tr(y), t))
 
     def compute_yprime_from_list(self, y, need_update=None, progress=False):
         if need_update is None:
             need_update = np.ones(len(self.params), dtype=bool)
         res = []
-        it = tqdm(list(zip(y, self.params, need_update))) if progress else zip(y, self.params, need_update)
+        it = (
+            tqdm(list(zip(y, self.params, need_update)))
+            if progress
+            else zip(y, self.params, need_update)
+        )
         for yi, pi, nu in it:
             if nu:
-                res.append(self.transform_chan(yi, pi))
+                res.append(self._transform_chan(yi, pi))
             else:
                 res.append(yi)
         return np.stack(res, axis=0)
 
+    def diagnostics(self, ctx, **_):
 
-    def diagnostics(self, saturation_thresholds, channel_names, **_):
+        saturation_thresholds = self.get_ctx(ctx, 'saturation_thresholds')
+        channel_names = self.get_ctx(ctx, 'channel_names')
+
         assert self.params is not None, "You need to run initialize() first"
-
         intervals = vmap(jnp.linspace, (0, 0, None))(
             saturation_thresholds[:, 0], saturation_thresholds[:, 1], 500
         ).T
@@ -684,17 +700,13 @@ class Colinearization(Task):
             ax.set_ylabel(channel_names[i] + "'")
         fig.tight_layout()
 
-    def process(self, observations_raw, **kw):
+    def process(self, ctx):
+        observations_raw = self.get_ctx(ctx, 'observations_raw')
         assert self.params is not None, "You need to run initialize() first"
-        self.log.debug(f"Linearizing observations of shape {observations_raw.shape}")
+        self._log.debug(f"Linearizing observations of shape {observations_raw.shape}")
         x = self.compute_yprime_from_list(observations_raw.T).T
-        self.log.debug(f"Linearization done, output shape: {x.shape}")
+        self._log.debug(f"Linearization done, output shape: {x.shape}")
         return {'observations_raw': x}
 
 
-
-
-
 ##────────────────────────────────────────────────────────────────────────────}}}
-
-

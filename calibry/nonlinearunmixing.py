@@ -115,7 +115,7 @@ class NonLinearUnmixing(Task):
             return res
 
         self.residual_fun = lsq_residuals_inner_log if self.logspace else lsq_residuals
-        self.log.debug(f'Using {"logspace" if self.logspace else "linear"} LSQ')
+        self._log.debug(f'Using {"logspace" if self.logspace else "linear"} LSQ')
 
         # for easier plotting purpose, we can create the matrix of functions as partials
         self.F_mat = []
@@ -146,7 +146,7 @@ class NonLinearUnmixing(Task):
         assert self.F is not None, "Contribution function not computed"
 
         # remove observations for which any reference channel is saturated:
-        self.log.debug(f'Starting solve for {observations_raw.shape[0]} observations')
+        self._log.debug(f'Starting solve for {observations_raw.shape[0]} observations')
 
         selected = (
             observations_raw[:, reference_channels]

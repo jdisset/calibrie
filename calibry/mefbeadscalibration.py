@@ -18,34 +18,27 @@ from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear.linear_problem import LinearProblem
 from ott.solvers.linear.sinkhorn import Sinkhorn
 
-from . import BeadsBase
+from calibry.beadsbase import BeadsBase
+
 
 class MEFBeadsCalibration(BeadsBase):
-    """ Calibrate a reference protein to MEF units using beads """
+    """Calibrate a reference protein to MEF units using beads"""
 
-    def __init__(
-        self,
-
-        model_resolution: int = 7,
-        model_degree: int = 1,
-        **kwargs
-    ):
-
-        super().__init__(**kwargs)
-        self.model_resolution = model_resolution
-        self.model_degree = model_degree
+    model_resolution: int = 7
+    model_degree: int = 1
 
     def initialize(
         self,
-        channel_names,
-        reference_channels,
-        reference_protein_name,
-        reference_protein_id,
-        controls_abundances_mapped,
-        **kwargs,
+        ctx,
     ):
 
-        super().initialize(channel_names=channel_names, **kwargs)
+        channel_names = self.get_ctx(ctx, 'channel_names')
+        reference_channels = self.get_ctx(ctx, 'reference_channels')
+        reference_protein_name = self.get_ctx(ctx, 'reference_protein_name')
+        reference_protein_id = self.get_ctx(ctx, 'reference_protein_id')
+        controls_abundances_mapped = self.get_ctx(ctx, 'controls_abundances_mapped')
+
+        super().initialize(ctx)
 
         self.calibration_channel_name = channel_names[reference_channels[reference_protein_id]]
         if self.use_channels is None:
@@ -54,7 +47,7 @@ class MEFBeadsCalibration(BeadsBase):
         if self.channel_units[self.calibration_channel_name] is None:
             raise ValueError(f'{self.calibration_channel_name} has no associated units')
 
-        self.log.debug(
+        self._log.debug(
             f'Calibrating with channel {self.calibration_channel_name} and protein {reference_protein_name}'
         )
 
@@ -72,23 +65,27 @@ class MEFBeadsCalibration(BeadsBase):
         self.controls_abundances_MEF = self.process(controls_abundances_mapped)['abundances_MEF']
 
         self.calibration_channel_id = self.use_channels.index(self.calibration_channel_name)
-        self.log.debug(f'Calibrated abundances will be expressed in {self.calibration_units_name}')
+        self._log.debug(f'Calibrated abundances will be expressed in {self.calibration_units_name}')
 
         return {
             'controls_abundances_MEF': self.controls_abundances_MEF,
             'calibration_units_name': self.calibration_units_name,
         }
 
-    def process(self, abundances_mapped, **_):
-        self.log.debug(f'Calibrating values to {self.calibration_units_name}')
+    def process(self, ctx):
+        abundances_mapped = self.get_ctx(ctx, 'abundances_mapped')
+        self._log.debug(f'Calibrating values to {self.calibration_units_name}')
         params = self.params[self.calibration_channel_id]
-        tr_abundances = self.tr(abundances_mapped)
+        tr_abundances = self._tr(abundances_mapped)
         tr_calibrated = vmap(utils.evaluate_stacked_poly, in_axes=(1, None))(tr_abundances, params)
         abundances_MEF = self.itr(tr_calibrated).T
         return {'abundances_MEF': abundances_MEF}
 
+    def diagnostics(self, ctx, **kw):
+        controls_masks = self.get_ctx(ctx, 'controls_masks')
+        protein_names = self.get_ctx(ctx, 'protein_names')
+        channel_names = self.get_ctx(ctx, 'channel_names')
 
-    def diagnostics(self, controls_masks, protein_names, channel_names, **kw):
         controls_abundances, std_models = utils.generate_controls_dict(
             self.controls_abundances_MEF,
             controls_masks,
@@ -112,6 +109,3 @@ class MEFBeadsCalibration(BeadsBase):
                 'channel_regression': regfig,
             }
         }
-
-
-

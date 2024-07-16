@@ -1,4 +1,5 @@
 from jaxopt import GaussNewton
+from calibry.utils import Escaped
 from .pipeline import Task
 import jax
 from jax import jit, vmap
@@ -9,142 +10,96 @@ import lineax as lx
 from functools import partial
 from . import plots, utils
 import matplotlib.pyplot as plt
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 from jax.scipy.stats import gaussian_kde
+import pandas as pd
 
 from scipy.interpolate import UnivariateSpline
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear.linear_problem import LinearProblem
 from ott.solvers.linear.sinkhorn import Sinkhorn
 
-# remember: the first bead is not reliable and should'nt contribute to the calibration
-MEF_VALUES_SPHEROTECH_RCP_30_5a = {
-    'MEFL': [456, 4648, 14631, 42313, 128924, 381106, 1006897, 2957538, 7435549],
-    'MEPE': [196, 2800, 8770, 25174, 74335, 219816, 548646, 1600005, 4255375],
-    'MEPTR': [1034, 17518, 53950, 153641, 450901, 1283877, 3254513, 9431807, 24840372],
-    'MEPerCP': [605, 4354, 10032, 22473, 51739, 115599, 256091, 562684, 1201350],
-    'MEPCY5.5': [180, 2088, 6705, 20441, 66215, 211174, 645020, 2478405, 10603147],
-    'MEeF710': [258, 2259, 6862, 20129, 63316, 196680, 609247, 2451473, 11687960],
-    'MEPCY7': [88, 534, 1555, 4600, 14826, 47575, 161926, 706536, 3262715],
-    'MEPTR': [1142, 17518, 53950, 153641, 450901, 1283877, 3254513, 9431807, 24840372],
-    'MEPCY5': [1026, 4354, 10032, 22473, 51739, 115599, 256091, 562684, 1201350],
-    'MEPCY5.5': [185, 1999, 6228, 20393, 69124, 220232, 777840, 2521966, 8948283],
-    'MEAX700': [480, 6625, 17113, 58590, 199825, 629666, 2289301, 6504723, 17637305],
-    'MEPCY7': [25, 457, 1334, 4666, 17500, 58774, 230324, 724800, 2057002],
-    'MEAPC': [743, 1170, 1970, 4669, 13757, 36757, 119744, 293242, 638909],
-    'MEAX680': [945, 6844, 17166, 56676, 195246, 622426, 2333985, 6617776, 17561028],
-    'MEAX700': [495, 6625, 17113, 58590, 199825, 629666, 2289301, 6504723, 17637305],
-    'MEAPCCY7': [73, 1385, 3804, 13066, 47512, 151404, 542987, 1305924, 2540123],
-    'PacBlue': [979, 4450, 8342, 17587, 38906, 89281, 179989, 408481, 822214],
-    'MEAMCY': [1987, 5974, 10513, 21623, 46727, 105630, 213273, 494395, 1072308],
-    'MEPO': [148, 391, 753, 1797, 4766, 13937, 39280, 156244, 652221],
-    'MEQ605': [1718, 3133, 4774, 8471, 16359, 34465, 71375, 189535, 517591],
-    'MEQ655': [1060, 1859, 2858, 5598, 11928, 27542, 66084, 202508, 650000],
-    'MEQ705': [840, 1695, 2858, 5598, 11928, 27542, 66084, 202508, 650000],
-    'MEBV711': [1345, 1564, 3234, 5516, 12249, 29651, 71051, 197915, 596714],
-    'MEQ800': [857, 1358, 2085, 4301, 10037, 23446, 64511, 186279, 644779],
-}
+from .utils import Context, LoadedData
 
-FORTESSA_CHANNELS_UNITS = {
-    'Pacific_Blue': 'PacBlue',
-    'AmCyan': 'MEAMCY',
-    'FITC': 'MEFL',
-    'PerCP_Cy5_5': 'MEPCY5.5',
-    'PE': 'MEPE',
-    'PE_Texas_Red': 'MEPTR',
-    'APC': 'MEAPC',
-    'APC_Alexa_700': 'MEAX700',
-    'APC_Cy7': 'MEAPCCY7',
-}
+from dracon.utils import  DictLike
+from dracon.loader import  LoadedConfig
+
+from pydantic import Field
 
 
 class MEFBeadsCalibration(Task):
-    def __init__(
-        self,
-        beads_data,
-        beads_mef_values: Dict[str, List[float]] = MEF_VALUES_SPHEROTECH_RCP_30_5a,
-        channel_units: Dict[str, str] = FORTESSA_CHANNELS_UNITS,
-        use_channels: List[str] = None,
-        ignore_channels_with_missing_units: bool = False,
-        density_resolution: int = 1000,
-        density_bw_method=0.2,
-        relative_density_threshold: float = 0.8,
-        resample_observations_to: int = 30000,
-        log_poly_threshold=200,
-        log_poly_scale=0.5,
-        model_resolution: int = 7,
-        model_degree: int = 1,
-    ):
-        """
-        beads_data: np.ndarray - array of shape (n_events, n_channels) containing the beads data
-        beads_mef_vlaues : dict[str, list[float]] - dictionary associating the unit name
-            to the list of reference values for the beads in this unit
-            e.g : {'MEFL': [456, 4648, 14631, 42313, 128924, 381106, 1006897, 2957538, 7435549], 'MEPE': ...}
+    """
+    beads_data: np.ndarray - array of shape (n_events, n_channels) containing the beads data
+    """
 
-        channel_units : dict[str, str] - dictionary associating the channel name to the unit name
-            e.g. {'Pacific Blue-A': 'PacBlue', 'AmCyan-A': 'MEAMCY', ...}"""
+    beads_data: LoadedData
+    beads_mef_values: LoadedConfig[Escaped[DictLike[str, List[float]]]] = (
+        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@mef_values'
+    )
+    channel_units: LoadedConfig[Escaped[DictLike[str, str]]] = (
+        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
+    )
+    use_channels: Optional[Escaped[List[str]]] = None
+    ignore_channels_with_missing_units: bool = False
+    density_resolution: int = 1000
+    density_bw_method: float = 0.2
+    relative_density_threshold: float = 0.8
+    resample_observations_to: int = 30000
+    log_poly_threshold: float = 200
+    log_poly_scale: float = 0.5
+    model_resolution: int = 7
+    model_degree: int = 2
 
-        super().__init__()
-        self.beads_data = beads_data
-        self.beads_mef_values = utils.escape(beads_mef_values)
-        self.channel_units = utils.escape(channel_units)
-        self.ignore_channels_with_missing_units = ignore_channels_with_missing_units
-        self.density_resolution = density_resolution
-        self.density_bw_method = density_bw_method
-        self.relative_density_threshold = relative_density_threshold
-        self.resample_observations_to = resample_observations_to
-        self.use_channels = utils.escape(use_channels)
-        self.model_resolution = model_resolution
-        self.model_degree = model_degree
-        self.tr = partial(
-            utils.logtransform, threshold=log_poly_threshold, compression=log_poly_scale, base=10
-        )
-        self.itr = partial(
-            utils.inv_logtransform,
-            threshold=log_poly_threshold,
-            compression=log_poly_scale,
+
+    def model_post_init(self, *args, **kwargs):
+
+        super().model_post_init(*args, **kwargs)
+
+        self._tr = partial(
+            utils.logtransform,
+            threshold=self.log_poly_threshold,
+            compression=self.log_poly_scale,
             base=10,
         )
-        self.log_poly_threshold = log_poly_threshold
-        self.log_poly_scale = log_poly_scale
 
-    def initialize(
-        self,
-        channel_names,
-        saturation_thresholds,
-        reference_channels,
-        reference_protein_name,
-        reference_protein_id,
-        controls_abundances_mapped,
-        colinearizer=None,
-        **_,
-    ):
-
-        self.calibration_channel_name = channel_names[reference_channels[reference_protein_id]]
-        if self.use_channels is None:
-            self.use_channels = channel_names
-
-        if self.channel_units[self.calibration_channel_name] is None:
-            raise ValueError(f'{self.calibration_channel_name} has no associated units')
-
-        self.log.debug(
-            f'Calibrating with channel {self.calibration_channel_name} and protein {reference_protein_name}'
+        self._itr = partial(
+            utils.inv_logtransform,
+            threshold=self.log_poly_threshold,
+            compression=self.log_poly_scale,
+            base=10,
         )
 
-        if self.calibration_channel_name not in channel_names:
+    def initialize(self, ctx: Context):
+        self._calibration_channel_name = ctx.channel_names[
+            ctx.reference_channels[ctx.reference_protein_id]
+        ]
+
+        if self.use_channels is None:
+            self.use_channels = ctx.channel_names
+
+        if self.channel_units[self._calibration_channel_name] is None:
+            raise ValueError(f'{self._calibration_channel_name} has no associated units')
+
+        self._log.debug(
+            f'Calibrating with channel {self._calibration_channel_name} and protein {ctx.reference_protein_name}'
+        )
+
+        if self._calibration_channel_name not in ctx.channel_names:
             raise ValueError('Calibration channel not found in the main channels')
-        if self.calibration_channel_name not in self.use_channels:
+        if self._calibration_channel_name not in self.use_channels:
             raise ValueError(
                 'Calibration channel not found in the channels used for beads (use_channels)'
             )
 
-        self.calibration_units_name = self.channel_units[self.calibration_channel_name]
-        if self.calibration_units_name not in self.beads_mef_values:
-            raise ValueError(f'No beads values for {self.calibration_units_name}')
+        self._calibration_units_name = self.channel_units[self._calibration_channel_name]
+        if self._calibration_units_name not in self.beads_mef_values:
+            raise ValueError(f'No beads values for {self._calibration_units_name}')
 
-        # check that we have beads mef_values for all the channels we use
         remove_chans = []
+
+        assert self.use_channels is not None
+
         for c in self.use_channels:
             if c not in self.channel_units:
                 if not self.ignore_channels_with_missing_units:
@@ -158,91 +113,96 @@ class MEFBeadsCalibration(Task):
                 raise ValueError(f'No unit values for channel {c} ({self.channel_units[c]})')
 
         if len(remove_chans) > 0:
-            self.log.debug(f'No beads units for {remove_chans}. Removing them from use_channels')
+            self._log.debug(f'No beads units for {remove_chans}. Removing them from use_channels')
             self.use_channels = [c for c in self.use_channels if c not in remove_chans]
 
-        all_chans = list(set(channel_names + self.use_channels))
-        self.beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
+        all_chans = list(set(ctx.channel_names + self.use_channels))
+        self._beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
 
-        if colinearizer is not None:
-            # we need to get the pipeline channels if we want to use the colinearizer
-            chan_ids = [all_chans.index(c) for c in channel_names]
-            self.beads_data_array[:, chan_ids] = colinearizer.process(
-                self.beads_data_array[:, chan_ids]
-            )['observations_raw']
+        if ctx.get('colinearizer', None) is not None:
+            chan_ids = [all_chans.index(c) for c in ctx.channel_names]
+            self._beads_data_array[:, chan_ids] = ctx.colinearizer.process(
+                Context(abundances_mapped=self._beads_data_array[:, chan_ids])
+            ).observations_raw
 
-        # now only take the channels we use
-        self.beads_data_array = self.beads_data_array[
+        self._beads_data_array = self._beads_data_array[
             :, [all_chans.index(c) for c in self.use_channels]
         ]
 
-        self.beads_mef_array = np.array(
+        self._beads_mef_array = np.array(
             [self.beads_mef_values[self.channel_units[c]] for c in self.use_channels]
         ).T
 
-        self.saturation_thresholds = []
+        self._saturation_thresholds = []
         for i, c in enumerate(self.use_channels):
-            if c in channel_names:
-                idc = channel_names.index(c)
-                self.saturation_thresholds.append(saturation_thresholds[idc])
+            if c in ctx.channel_names:
+                idc = ctx.channel_names.index(c)
+                self._saturation_thresholds.append(ctx.saturation_thresholds[idc])
             else:
-                self.saturation_thresholds.append(
-                    np.quantile(self.beads_data_array[:, i], [0.001, 0.999])
+                self._saturation_thresholds.append(
+                    np.quantile(self._beads_data_array[:, i], [0.001, 0.999])
                 )
 
-        self.calibration_channel_id = self.use_channels.index(self.calibration_channel_name)
+        self._calibration_channel_id = self.use_channels.index(self._calibration_channel_name)
 
-        self.saturation_thresholds = np.array(self.saturation_thresholds)
+        self._saturation_thresholds = np.array(self._saturation_thresholds)
 
-        self.log.debug(f'Calibrated abundances will be expressed in {self.calibration_units_name}')
+        self._log.debug(
+            f'Calibrated abundances will be expressed in {self._calibration_units_name}'
+        )
 
-        self.log.debug(f'Computing beads locations')
-        self.compute_peaks(self.beads_data_array, self.beads_mef_array)
-        self.log.debug(f'Locations: {self.bead_peak_locations}')
+        self._log.debug(f'Computing beads locations')
+        self.compute_peaks(self._beads_data_array, self._beads_mef_array)
+        self._log.debug(f'Locations: {self._bead_peak_locations}')
         self.fit_regressions()
-        self.log.debug(f'Applying calibration to controls')
-        self.controls_abundances_MEF = self.process(controls_abundances_mapped)['abundances_MEF']
+        self._log.debug(f'Applying calibration to controls')
+        self._controls_abundances_MEF = self.process(
+            Context(abundances_mapped=ctx.controls_abundances_mapped)
+        ).abundances_MEF
 
-        return {
-            'controls_abundances_MEF': self.controls_abundances_MEF,
-            'calibration_units_name': self.calibration_units_name,
-        }
+        return Context(
+            controls_abundances_MEF=self._controls_abundances_MEF,
+            calibration_units_name=self._calibration_units_name,
+        )
 
-    def diagnostics(self, controls_masks, protein_names, channel_names, **kw):
+    def diagnostics(self, ctx: Context, **kw):
         controls_abundances, std_models = utils.generate_controls_dict(
-            self.controls_abundances_MEF,
-            controls_masks,
-            protein_names,
+            self._controls_abundances_MEF,
+            ctx.controls_masks,
+            ctx.protein_names,
             **kw,
         )
 
         f, _ = plots.unmixing_plot(
             controls_abundances,
-            protein_names,
-            channel_names,
+            ctx.protein_names,
+            ctx.channel_names,
             **kw,
         )
-        f.suptitle(f'Unmixing after calibration to {self.calibration_units_name}', y=1.05)
+        f.suptitle(f'Unmixing after calibration to {self._calibration_units_name}', y=1.05)
 
         peakfig = self.plot_bead_peaks_diagnostics()
         regfig = self.plot_regressions()
 
         classname = self.__class__.__name__
-        return {
-            f'diagnostics_{classname}': {
-                'mefcontrols': f,
-                'peak_id': peakfig,
-                'channel_regression': regfig,
+        return Context().update(
+            {
+                f'diagnostics_{classname}': {
+                    'mefcontrols': f,
+                    'peak_id': peakfig,
+                    'channel_regression': regfig,
+                }
             }
-        }
+        )
 
-    def process(self, abundances_mapped, **_):
-        self.log.debug(f'Calibrating values to {self.calibration_units_name}')
-        params = self.params[self.calibration_channel_id]
-        tr_abundances = self.tr(abundances_mapped)
+    def process(self, ctx: Context):
+        self._log.debug(f'Calibrating values to {self._calibration_units_name}')
+        params = self._params[self._calibration_channel_id]
+        tr_abundances = self._tr(ctx.abundances_mapped)
         tr_calibrated = vmap(utils.evaluate_stacked_poly, in_axes=(1, None))(tr_abundances, params)
-        abundances_MEF = self.itr(tr_calibrated).T
-        return {'abundances_MEF': abundances_MEF}
+        abundances_MEF = self._itr(tr_calibrated).T
+        self._log.debug(f'Calibrated values mef: {abundances_MEF}')
+        return Context(abundances_MEF=abundances_MEF)
 
     def compute_peaks(
         self,
@@ -260,15 +220,15 @@ class MEFBeadsCalibration(Task):
             beads_observations = beads_observations[reorder]
 
         not_saturated = (
-            (beads_observations > self.saturation_thresholds[:, 0])
-            & (beads_observations < self.saturation_thresholds[:, 1])
+            (beads_observations > self._saturation_thresholds[:, 0])
+            & (beads_observations < self._saturation_thresholds[:, 1])
         ).T
 
-        self.obs_tr = self.tr(beads_observations)
-        self.mef_tr = self.tr(beads_mef_values)
-        self.saturation_thresholds_tr = self.tr(self.saturation_thresholds)
+        self._obs_tr = self._tr(beads_observations)
+        self._mef_tr = self._tr(beads_mef_values)
+        self._saturation_thresholds_tr = self._tr(self._saturation_thresholds)
 
-        self.log.debug(f'Computing votes')
+        self._log.debug(f'Computing votes')
 
         @jit
         @partial(vmap, in_axes=(1, 1))
@@ -285,7 +245,7 @@ class MEFBeadsCalibration(Task):
                 LinearProblem(PointCloud(chan_observations[:, None], chan_mef[:, None]))
             ).matrix
 
-        votes = vote(self.obs_tr, self.mef_tr)  # (CHANNELS, OBSERVATIONS, BEADS)
+        votes = vote(self._obs_tr, self._mef_tr)  # (CHANNELS, OBSERVATIONS, BEADS)
         valid_votes = votes * not_saturated[:, :, None] + 1e-12  # (CHANNELS, OBSERVATIONS, BEADS)
         vmat = (
             np.sum(valid_votes, axis=0) / np.sum(not_saturated, axis=0)[:, None]
@@ -293,45 +253,45 @@ class MEFBeadsCalibration(Task):
 
         # Use these votes to decide which beads are the most likely for each observation
         # Tried with a softer version of this just in case, but I couldn't see any improvement
-        self.vmat = np.argmax(vmat, axis=1)[:, None] == np.arange(vmat.shape[1])[None, :]
+        self._vmat = np.argmax(vmat, axis=1)[:, None] == np.arange(vmat.shape[1])[None, :]
 
         # We add some tiny random normal noise to avoid singular matrix errors when computing the KDE
         # on a bead that would have only the exact same value (which can happen when out of range)
-        self.peaks_max_x = self.obs_tr.max() * 1.05
-        self.peaks_min_x = self.obs_tr.min() * 0.95
-        noise_std = (self.peaks_max_x - self.peaks_min_x) / (self.density_resolution * 5)
-        obs = self.obs_tr + np.random.normal(0, noise_std, self.obs_tr.shape)
+        self._peaks_max_x = self._obs_tr.max() * 1.05
+        self._peaks_min_x = self._obs_tr.min() * 0.95
+        noise_std = (self._peaks_max_x - self._peaks_min_x) / (self.density_resolution * 5)
+        obs = self._obs_tr + np.random.normal(0, noise_std, self._obs_tr.shape)
 
         # Now we can compute the densities for each bead in each channel in order to locate the peaks
-        self.log.debug(f'Computing densities')
-        x = np.linspace(self.peaks_min_x, self.peaks_max_x, self.density_resolution)
+        self._log.debug(f'Computing densities')
+        x = np.linspace(self._peaks_min_x, self._peaks_max_x, self.density_resolution)
         w_kde = lambda s, w: gaussian_kde(s, weights=w, bw_method=self.density_bw_method)(x)
-        densities = jit(vmap(vmap(w_kde, in_axes=(None, 1)), in_axes=(1, None)))(obs, self.vmat)
+        densities = jit(vmap(vmap(w_kde, in_axes=(None, 1)), in_axes=(1, None)))(obs, self._vmat)
         densities = densities.transpose(1, 0, 2)  # densities.shape is (BEADS, CHANNELS, RESOLUTION)
-        self.beads_densities = densities / np.max(densities, axis=2)[:, :, None]
+        self._beads_densities = densities / np.max(densities, axis=2)[:, :, None]
 
         # find the most likely peak positions for each bead using
         # the average intensity weighted by density
 
-        unsaturated_density = (x > self.saturation_thresholds_tr[:, 0][:, None]) & (
-            x < self.saturation_thresholds_tr[:, 1][:, None]
+        unsaturated_density = (x > self._saturation_thresholds_tr[:, 0][:, None]) & (
+            x < self._saturation_thresholds_tr[:, 1][:, None]
         )
 
-        rel_mask = self.beads_densities > self.relative_density_threshold
+        rel_mask = self._beads_densities > self.relative_density_threshold
         # forget about the unsaturated_density mask, it's not useful
 
-        w = self.beads_densities * rel_mask
+        w = self._beads_densities * rel_mask
 
         # w.shape is (BEADS, CHANNELS, RESOLUTION)
 
         is_zero = np.sum(w, axis=2) == 0
         w = np.where(is_zero[:, :, None], 1, w)
 
-        self.weighted_densities = w
-        self.log.debug(f'w sum: {np.sum(w)}')
+        self._weighted_densities = w
+        self._log.debug(f'w sum: {np.sum(w)}')
 
-        xx = np.tile(x, (self.beads_densities.shape[0], self.beads_densities.shape[1], 1))
-        self.bead_peak_locations = np.average(
+        xx = np.tile(x, (self._beads_densities.shape[0], self._beads_densities.shape[1], 1))
+        self._bead_peak_locations = np.average(
             xx, axis=2, weights=w
         )  # peaks.shape is (BEADS, CHANNELS)
 
@@ -344,12 +304,12 @@ class MEFBeadsCalibration(Task):
 
             return vmap(vmap(overlap_1v1, (0, None)), (None, 0))(X, X)
 
-        self.log.debug(f'Computing overlap matrix')
+        self._log.debug(f'Computing overlap matrix')
 
-        self.overlap = overlap(self.weighted_densities)
+        self._overlap = overlap(self._weighted_densities)
 
     @partial(jax.jit, static_argnums=(0,))
-    def regression(self, x, y, w, xbounds):
+    def _regression(self, x, y, w, xbounds):
         # EXPECTS VALUES ALREADY IN LOG SPACE
         params = utils.fit_stacked_poly_uniform_spacing(
             x, y, w, *xbounds, self.model_resolution, self.model_degree, endpoint=True
@@ -358,41 +318,41 @@ class MEFBeadsCalibration(Task):
 
     def fit_regressions(self, ignore_first_bead=True, **_):
         # we weight the points by how much they *don't* overlap
-        diag = np.eye(self.overlap.shape[0], self.overlap.shape[1], dtype=bool)
-        W = np.array(1 - self.overlap.at[diag].set(0).max(axis=0))
+        diag = np.eye(self._overlap.shape[0], self._overlap.shape[1], dtype=bool)
+        W = np.array(1 - self._overlap.at[diag].set(0).max(axis=0))
         if ignore_first_bead:  # almost...
             W[0, :] = 1e-6 * W[0, :]
-        self.peak_weights = W
+        self._peak_weights = W
         # we fit a regression for each channel
-        self.params = []
+        self._params = []
         for i in range(len(self.use_channels)):
-            peaks_au = self.bead_peak_locations[:, i]
-            beads_mef = self.mef_tr[:, i]
-            self.params.append(
-                self.regression(
+            peaks_au = self._bead_peak_locations[:, i]
+            beads_mef = self._mef_tr[:, i]
+            self._params.append(
+                self._regression(
                     peaks_au,
                     beads_mef,
                     w=W[:, i],
-                    xbounds=self.saturation_thresholds_tr[i],
+                    xbounds=self._saturation_thresholds_tr[i],
                 )
             )
 
     def plot_regressions(self):
-        NBEADS, NCHAN = self.mef_tr.shape
+        NBEADS, NCHAN = self._mef_tr.shape
         fig, axes = plt.subplots(1, NCHAN, figsize=(5 * NCHAN, 5))
         for c in range(NCHAN):
             ax = axes[c]
-            w = self.peak_weights[:, c]
+            w = self._peak_weights[:, c]
             ax.scatter(
-                self.bead_peak_locations[:, c],
-                self.mef_tr[:, c],
+                self._bead_peak_locations[:, c],
+                self._mef_tr[:, c],
                 c=np.clip(w, 0, 1),
                 cmap='RdYlGn',
             )
             x = np.linspace(
-                self.saturation_thresholds_tr[c, 0], self.saturation_thresholds_tr[c, 1], 300
+                self._saturation_thresholds_tr[c, 0], self._saturation_thresholds_tr[c, 1], 300
             )
-            y = utils.evaluate_stacked_poly(x, self.params[c])
+            y = utils.evaluate_stacked_poly(x, self._params[c])
             ax.plot(x, y, color='k', ls='--', alpha=0.75)
             ax.set_title(self.use_channels[c])
             ax.set_xlabel('AU')
@@ -405,18 +365,18 @@ class MEFBeadsCalibration(Task):
         - An assignment chart showing the proportion of observations assigned to each bead
         - 1 plot per channel showing both bead assignment, peak detection and final standardized densities
         """
-        svmat = np.array(self.vmat)
-        nbeads = self.bead_peak_locations.shape[0]
+        svmat = np.array(self._vmat)
+        nbeads = self._bead_peak_locations.shape[0]
 
         mainfig = plt.figure(constrained_layout=True, figsize=(15, 15))
         subfigs = mainfig.subfigures(1, 3, wspace=0, width_ratios=[0.4, 10, 2])
-        assignment = np.sort(np.argmax(self.vmat, axis=1))[:, None]
+        assignment = np.sort(np.argmax(self._vmat, axis=1))[:, None]
         ax = subfigs[0].subplots(1, 1)
         cmap = plt.get_cmap('tab10')
         cmap.set_bad(color='white')
         centroids = [
             (np.arange(len(assignment))[assignment[:, 0] == i]).mean()
-            for i in range(self.vmat.shape[1])
+            for i in range(self._vmat.shape[1])
         ]
         ax.imshow(
             assignment,
@@ -424,7 +384,7 @@ class MEFBeadsCalibration(Task):
             cmap=cmap,
             interpolation='none',
             vmin=0,
-            vmax=self.vmat.shape[1],
+            vmax=self._vmat.shape[1],
             origin='lower',
         )
         for i, c in enumerate(centroids):
@@ -440,14 +400,14 @@ class MEFBeadsCalibration(Task):
         ax.set_xticks([])
         ax.set_yticks([0, len(assignment)])
 
-        resolution = self.beads_densities.shape[2]
-        x = np.linspace(self.peaks_min_x, self.peaks_max_x, resolution)
+        resolution = self._beads_densities.shape[2]
+        x = np.linspace(self._peaks_min_x, self._peaks_max_x, resolution)
         axes = subfigs[1].subplots(len(self.use_channels), 1, sharex=True)
         if len(self.use_channels) == 1:
             axes = [axes]
 
-        weights = (x > self.saturation_thresholds_tr[:, 0][:, None]) & (
-            x < self.saturation_thresholds_tr[:, 1][:, None]
+        weights = (x > self._saturation_thresholds_tr[:, 0][:, None]) & (
+            x < self._saturation_thresholds_tr[:, 1][:, None]
         )
 
         print(f'weights.shape: {weights.shape}')
@@ -457,12 +417,12 @@ class MEFBeadsCalibration(Task):
             ax = axes[c]
             for b in range(nbeads):
 
-                dens = self.beads_densities[b, c]
-                dens /= jnp.max(self.beads_densities[b, c])
+                dens = self._beads_densities[b, c]
+                dens /= jnp.max(self._beads_densities[b, c])
                 ax.plot(x, dens, label=f'bead {b}', linewidth=1.25, color=beadcolors[b])
 
                 # also plot the actual distribution
-                kde = gaussian_kde(self.obs_tr[:, c], bw_method=0.01)
+                kde = gaussian_kde(self._obs_tr[:, c], bw_method=0.01)
                 d2 = kde(x)
                 d2 /= np.max(d2) * 1.25
                 ax.plot(x, d2, color='k', linewidth=0.75, alpha=1, label='_nolegend_')
@@ -483,10 +443,10 @@ class MEFBeadsCalibration(Task):
                 )
 
                 # vline at peak
-                ax.axvline(self.bead_peak_locations[b, c], color='k', linewidth=0.5, dashes=(3, 3))
+                ax.axvline(self._bead_peak_locations[b, c], color='k', linewidth=0.5, dashes=(3, 3))
                 # write bead number
                 ax.text(
-                    self.bead_peak_locations[b, c] + 0.01,
+                    self._bead_peak_locations[b, c] + 0.01,
                     0.3 + 0.1 * b,
                     f'{b}',
                     fontsize=8,
@@ -498,7 +458,7 @@ class MEFBeadsCalibration(Task):
 
                 tr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
                     ax,
-                    [self.itr(self.peaks_min_x), self.itr(self.peaks_max_x * 1.02)],
+                    [self._itr(self._peaks_min_x), self._itr(self._peaks_max_x * 1.02)],
                     None,
                     linthresh=self.log_poly_threshold,
                     linscale=self.log_poly_scale,
@@ -511,10 +471,10 @@ class MEFBeadsCalibration(Task):
         subfigs[1].suptitle("Bead peak diagnostics")
 
         # plot overlap matrix:
-        axes = subfigs[2].subplots(self.overlap.shape[2], 1, sharex=True)
+        axes = subfigs[2].subplots(self._overlap.shape[2], 1, sharex=True)
         for i, ax in enumerate(axes):
             im = ax.imshow(
-                self.overlap[:, :, i], cmap='Reds', extent=[0, nbeads, 0, nbeads], origin='lower'
+                self._overlap[:, :, i], cmap='Reds', extent=[0, nbeads, 0, nbeads], origin='lower'
             )
             ax.set_xticks(np.arange(nbeads) + 0.5)
             ax.set_yticks(np.arange(nbeads) + 0.5)
@@ -527,15 +487,15 @@ class MEFBeadsCalibration(Task):
     def plot_beads_after_correction(self):
         from matplotlib import cm
 
-        NBEADS, NCHAN = self.mef_tr.shape
+        NBEADS, NCHAN = self._mef_tr.shape
         fig, axes = plt.subplots(1, NCHAN, figsize=(1.3 * NCHAN, 9))
         tdata = np.array(
-            [utils.evaluate_stacked_poly(o, p) for o, p in zip(self.obs_tr.T, self.params)]
+            [utils.evaluate_stacked_poly(o, p) for o, p in zip(self._obs_tr.T, self._params)]
         ).T
         tpeaks = np.array(
             [
                 utils.evaluate_stacked_poly(o, p)
-                for o, p in zip(self.bead_peak_locations.T, self.params)
+                for o, p in zip(self._bead_peak_locations.T, self._params)
             ]
         ).T
 
@@ -543,7 +503,7 @@ class MEFBeadsCalibration(Task):
             ax = axes[c]
             chan = self.use_channels[c]
             ax.set_title(f'{chan} \n(to {self.channel_units[chan]})', pad=40)
-            ym, yM = self.peaks_min_x * 0.8, self.peaks_max_x * 1.5
+            ym, yM = self._peaks_min_x * 0.8, self._peaks_max_x * 1.5
             ax.set_ylim(ym, yM)
             ax.set_yticks([])
             ax.set_xlim(-0.5, 0.5)
@@ -573,12 +533,12 @@ class MEFBeadsCalibration(Task):
                 peak_min, peak_max = np.min(tpeaks[:, c]) * 0.99, np.max(tpeaks[:, c]) * 1.01
                 print(f'Channel = {self.use_channels[c]}')
                 error = np.where(
-                    (self.mef_tr[1:, c] >= peak_min) & (self.mef_tr[1:, c] <= peak_max),
-                    np.abs(tpeaks[1:, c] - self.mef_tr[1:, c]),
+                    (self._mef_tr[1:, c] >= peak_min) & (self._mef_tr[1:, c] <= peak_max),
+                    np.abs(tpeaks[1:, c] - self._mef_tr[1:, c]),
                     np.nan,
                 )
                 # then compute the mean where it's not nan
-                avg_dist_btwn_peaks = np.nanmean(np.diff(self.mef_tr[:, c]))
+                avg_dist_btwn_peaks = np.nanmean(np.diff(self._mef_tr[:, c]))
                 error = np.nanmean(error) / avg_dist_btwn_peaks
                 # add beads as horizontal lines
                 for b in range(0, NBEADS):
@@ -594,11 +554,11 @@ class MEFBeadsCalibration(Task):
                         verticalalignment='center',
                     )
                     color = 'k'
-                    if self.mef_tr[b, c] <= peak_min or self.mef_tr[b, c] >= peak_max:
+                    if self._mef_tr[b, c] <= peak_min or self._mef_tr[b, c] >= peak_max:
                         color = 'r'
                         alpha = 0.35
                     ax.axhline(
-                        self.mef_tr[b, c],
+                        self._mef_tr[b, c],
                         alpha=alpha,
                         color=color,
                         lw=1,
@@ -608,7 +568,7 @@ class MEFBeadsCalibration(Task):
                     )
                     ax.text(
                         0.45,
-                        self.mef_tr[b, c] + 0.01,
+                        self._mef_tr[b, c] + 0.01,
                         f'{b}',
                         fontsize=8,
                         color=color,

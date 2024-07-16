@@ -1,13 +1,198 @@
 from pathlib import Path
+from dracon.utils import list_like, dict_like
+from copy import deepcopy
 import numpy as np
 import pandas as pd
 import flowio
 import jax.numpy as jnp
+from copy import deepcopy
 import jax
 from jax.tree_util import Partial as partial
 from jax import vmap, jit
 from tqdm import tqdm
 from scipy.interpolate import LSQUnivariateSpline, interp1d
+from pydantic import BaseModel, Field
+import dracon
+from typing import (
+    Union,
+    Dict,
+    Any,
+    Optional,
+    TypeVar,
+    Generic,
+    ForwardRef,
+    List,
+    TypeAlias,
+    Type,
+    Callable,
+    Sequence,
+)
+
+import inspect
+
+from pydantic import BeforeValidator, PlainSerializer, WrapSerializer
+from typing import Annotated
+
+import importlib.resources as pkg_resources
+config_path = Path(str(pkg_resources.files('calibry') / 'config'))
+
+## {{{                           --     types     --
+
+T = TypeVar('T')
+R = TypeVar('R')
+PathLike = Union[str, Path]
+
+
+class ArbitraryModel(BaseModel):
+
+    class Config:
+        arbitrary_types_allowed = True
+        validate_default = True
+        # extra = 'forbid'
+
+    def model_dump(self, **kwargs) -> dict[str, Any]:
+        return super().model_dump(serialize_as_any=True, **kwargs)
+
+    def model_dump_json(self, **kwargs) -> str:
+        return super().model_dump_json(serialize_as_any=True, **kwargs)
+
+    def __str__(self):
+        return self.__repr__()
+
+
+##────────────────────────────────────────────────────────────────────────────}}}
+
+MISSING = object()
+
+class KeyProvenance(ArbitraryModel):
+    origin_class: str
+    origin_function: str
+    key: str
+
+    @classmethod
+    def from_stack(cls, stack, key, stack_add_level=0):
+        caller_class = stack[1 + stack_add_level].frame.f_locals.get('self', None)
+        if caller_class is not None:
+            caller_class = f'{caller_class.__class__.__name__}'
+        else:
+            caller_class = ''
+        return cls(
+            origin_class=caller_class,
+            origin_function=stack[1 + stack_add_level].function,
+            key=key,
+        )
+
+    @property
+    def origin_str(self):
+        if self.origin_class:
+            return f'{self.origin_class}.{self.origin_function}'
+        return self.origin_function
+
+    def __repr__(self):
+        return f'{self.origin_str}:{self.key}'
+
+
+Context_t = ForwardRef('Context')
+
+
+class Context:
+    """
+    Acts like a dictionary but allows for object-like attribute access while
+    maintaining a history of key provenance for debugging and traceability.
+    """
+
+    def __init__(self, **kwargs):
+        super().__setattr__('origin', KeyProvenance.from_stack(inspect.stack(), '').origin_str)
+        super().__setattr__('key_history', {})
+        super().__setattr__('container', dict(**kwargs))
+
+    def origin_str(self, key):
+        out = ''
+        for kp in self.key_history.get(key, []):
+            out += f'{kp.origin_str} '
+        return out
+
+    def __repr__(self):
+        out = f'Context from {self.origin}:\n'
+        for k, v in self.container.items():
+            out += f' {k} -> {type(v)} ({self.origin_str(k)})\n'
+        return out
+
+    def __getitem__(self, key):
+        return self.get(key)
+
+    def __setitem__(self, key, value):
+        kp = KeyProvenance.from_stack(inspect.stack(), key)
+        return self.setv(key, value, [kp])
+
+    def __getattr__(self, key):
+        if key in self.__dict__:
+            return super().__getattribute__(key)
+        return self.get(key, stack_add_level=1)
+
+    def __setattr__(self, key, value):
+        if key in self.__dict__:
+            super().__setattr__(key, value)
+        else:
+            self[key] = value
+
+    def __contains__(self, key):
+        return key in self.container
+
+    def __iter__(self):
+        return iter(self.container)
+
+    def keys(self):
+        return self.container.keys()
+
+    def values(self):
+        return self.container.values()
+
+    def items(self):
+        return self.container.items()
+
+    def setv(self, key, value, history: Optional[list[KeyProvenance]] = None):
+        if history is None:
+            history = []
+        self.key_history.setdefault(key, []).extend(history)
+        self.container[key] = value
+
+    def get(self, key: str, default=MISSING, stack_add_level=0):
+        assert isinstance(key, str), f'Key must be a string, got {key}'
+        assert isinstance(self.container, dict), f'Container must be a dict, got {self.container}'
+        if default is MISSING:
+            print(f'key = {key}, container = {self.container}')
+            if key not in self.container:
+                kp = KeyProvenance.from_stack(inspect.stack(), key, stack_add_level)
+                raise KeyError(
+                    f'Key {key} not found in {kp.origin_str}\'s context. Available keys: {list(self.container.keys())}'
+                )
+        return self.container.get(key, default)
+
+    def update(self, other: dict[str, Any] | Context_t):  # type: ignore
+        if isinstance(other, Context):
+            for k, v in other.items():
+                history = other.key_history.get(k, [])
+                self.setv(k, v, history)
+        else:
+            for k, v in other.items():
+                self[k] = v
+        return self
+
+    def copy(self, keys_subset: Optional[list[str]] = None, deep=False, with_history=True):
+        if keys_subset is None:
+            keys_subset = list(self.keys())
+        out = Context()
+        for k in keys_subset:
+            v = self.get(k)
+            if deep:
+                v = deepcopy(v)
+            if with_history:
+                out.setv(k, v, self.key_history.get(k, []))
+            else:
+                out[k] = v
+        return out
+
 
 
 def generate_controls_dict(
@@ -47,17 +232,23 @@ def escape_name(name):
     return name.replace('-', '_').replace(' ', '_').upper().removesuffix('_A')
 
 
-def escape(names):
-    if isinstance(names, str):
-        return escape_name(names)
-    if isinstance(names, list):
-        return [escape(name) for name in names]
-    if isinstance(names, tuple):
-        return tuple([escape(name) for name in names])
-    if isinstance(names, dict):
-        return {escape(k): escape(v) for k, v in names.items()}
-    else:
-        return names
+
+def escape(x):
+    if isinstance(x, str):
+        return escape_name(x)
+    if dict_like(x):
+        new_dict = deepcopy(x)
+        for k, v in x.items():
+            new_dict.pop(k)
+            new_dict[escape(k)] = escape(v)
+        return new_dict
+    if list_like(x):
+        new_list = deepcopy(x)
+        for i, v in enumerate(x):
+            new_list[i] = escape(v)
+        return new_list
+    return x
+
 
 
 def astuple(x):
@@ -76,7 +267,7 @@ def load_fcs_to_df(fcs_file):
 
 
 def load_to_df(data, column_order=None):
-    # data can be either a pandas dataframe of a path to a file
+    # data can be either a pandas dataframe, and array, or a path to a file
     if isinstance(data, pd.DataFrame):
         df = data.copy()
         df.columns = escape(list(df.columns))
@@ -93,6 +284,8 @@ def load_to_df(data, column_order=None):
             df.columns = escape(list(df.columns))
         else:
             raise ValueError(f'File {data} has unknown suffix {data.suffix}')
+        # add path to metadata
+        df.attrs = {'from_file': data}
     if column_order is not None:
         df = df[escape(column_order)]
     # reset index so that it is ordered
@@ -100,10 +293,33 @@ def load_to_df(data, column_order=None):
     return df
 
 
+def serialize_loaded_data(df):
+    # check if the df has a from_file metadata. In which case we serialize the path
+    if isinstance(df, pd.DataFrame) and hasattr(df, 'attrs') and 'from_file' in df.attrs:
+        return str(df.attrs['from_file'])
+    # else, as dict:
+    return df.to_dict()
+
+
+
+LoadedData = Annotated[
+    pd.DataFrame,
+    BeforeValidator(partial(load_to_df, column_order=None)),
+    PlainSerializer(lambda x: serialize_loaded_data(x)),
+]
+
+Escaped = Annotated[T, BeforeValidator(escape)]
+
+
+
 DEFAULT_LOG_RESCALE = 10
 DEFAULT_LOG_OFFSET = 400
+
+
 def logoffset(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
     return (jnp.log(jnp.clip(x + offset, 1, None)) - jnp.log(offset)) * scale
+
+
 def inv_logoffset(x, scale=DEFAULT_LOG_RESCALE, offset=DEFAULT_LOG_OFFSET):
     return jnp.exp(x / scale + jnp.log(offset)) - offset
 
@@ -129,9 +345,7 @@ def poly_inverse(y, threshold, base=10):
     # used wolfram to solve the analytical inverse
     lT, lB, cb2 = jnp.log(threshold), jnp.log(base), jnp.cbrt(2)
     T, T2, T3 = threshold, threshold**2, threshold**3
-    A = T3 * (
-        56 + y * lB * (486 - 648 * lT + 216 * lT**2) - 522 * lT + 648 * lT**2 - 216 * lT**3
-    )
+    A = T3 * (56 + y * lB * (486 - 648 * lT + 216 * lT**2) - 522 * lT + 648 * lT**2 - 216 * lT**3)
     B = jnp.sqrt(4 * (-19 * T2 + 12 * T2 * lT) ** 3 + A**2)
     C = jnp.cbrt(A + B)
     D = -9 + 6 * lT
@@ -164,7 +378,6 @@ def biexponential_transform(x, threshold=100, base=10, linscale=0.4):
 
 
 def cubic_exp_fwd(x, threshold, base, scale=1):
-
     """
     cubic polynomial that goes through (0,0) and has same first
     and second derivative as the log function at the threshold
@@ -173,7 +386,7 @@ def cubic_exp_fwd(x, threshold, base, scale=1):
     """
     # assert base > 1 and scale > 0, 'Base must be > 1 and scale > 0'
     # assert (
-        # 6 * logb(threshold, base) * scale > 5
+    # 6 * logb(threshold, base) * scale > 5
     # ), 'Threshold too small for given scale (or vice versa)'
 
     logthresh = jnp.log(threshold)

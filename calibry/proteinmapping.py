@@ -1,6 +1,7 @@
 from jaxopt import GaussNewton
 from .pipeline import Task
 import jax
+from .utils import Context
 from jax import jit, vmap
 import jax.numpy as jnp
 import numpy as np
@@ -10,127 +11,123 @@ from functools import partial
 
 from . import plots, utils
 import matplotlib.pyplot as plt
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any, Callable
 
 
 class ProteinMapping(Task):
-    def __init__(
-        self,
-        reference_protein: str,
-        logspace=True,
-        model_resolution=10,
-        model_degree=2,
-        model_quantile_bounds=(0.05, 0.999),
-    ):
-        self.reference_protein = reference_protein.upper()
-        self.logspace = logspace
-        self.model_resolution = model_resolution
-        self.model_degree = model_degree
-        self.model_quantile_bounds = model_quantile_bounds
+
+    reference_protein: str
+    logspace: bool = True
+    model_resolution: int = 10
+    model_degree: int = 2
+    model_quantile_bounds: Tuple[float, float] = (0.05, 0.999)
+
+    def model_post_init(self, *args, **kwargs):
+        super().model_post_init(*args, **kwargs)
+        self.reference_protein = self.reference_protein.upper()
         if self.logspace:
-            self.logt = utils.logtransform
-            self.invlogt = utils.inv_logtransform
+            self._logt = utils.logtransform
+            self._invlogt = utils.inv_logtransform
         else:
-            self.logt = lambda x: x
-            self.invlogt = lambda x: x
+            self._logt = lambda x: x
+            self._invlogt = lambda x: x
 
-    def initialize(
-        self,
-        controls_abundances_AU,
-        controls_masks,
-        protein_names,
-        **_,
-    ):
+    def initialize(self, ctx: Context):
         t0 = time.time()
-        self.reference_protid = protein_names.index(self.reference_protein)
-        self.allprt_abundances = controls_abundances_AU[np.all(controls_masks == 1, axis=1)]
+        self._reference_protid = ctx.protein_names.index(self.reference_protein)
+        self._allprt_abundances = ctx.controls_abundances_AU[
+            np.all(ctx.controls_masks == 1, axis=1)
+        ]
 
-        self.params = []
-        ref = self.allprt_abundances[:, self.reference_protid]
+        ref = self._allprt_abundances[:, self._reference_protid]
         refbounds = np.quantile(ref, np.array(self.model_quantile_bounds))
-        self.log.debug(
-            f'Mapping {self.allprt_abundances.shape[1]-1} proteins to {self.reference_protein}'
+        self._log.debug(
+            f'Mapping {self._allprt_abundances.shape[1] - 1} proteins to {self.reference_protein}'
         )
 
-        for i in range(self.allprt_abundances.shape[1]):
-            otherp = self.allprt_abundances[:, i]
+        self._regression_results = []
+        for i in range(self._allprt_abundances.shape[1]):
+            otherp = self._allprt_abundances[:, i]
             xbounds = np.quantile(otherp, np.array(self.model_quantile_bounds))
             w = np.ones_like(otherp)
-            self.params.append(
-                self.regression(
-                    otherp,
-                    ref,
-                    w=w,
-                    xbounds=xbounds,
-                )
+            res = self._regression(
+                otherp,
+                ref,
+                w=w,
+                xbounds=xbounds,
             )
+            self._regression_results.append(res)
 
-        self.log.debug(f'Protein mapping took {time.time()-t0:.2f} seconds')
+        self._log.debug(f'Protein mapping took {time.time() - t0:.2f} seconds')
 
-        self.log.debug(f'Mapping controls to {self.reference_protein}')
-        self.controls_abundances_mapped = self.apply_prtmap(controls_abundances_AU, self.params)
-        self.log.debug(f'Done')
+        self._log.debug(f'Mapping controls to {self.reference_protein}')
+        self._controls_abundances_mapped = self._apply_prtmap(
+            ctx.controls_abundances_AU, self._regression_results
+        )
+        self._log.debug(f'Done')
 
-        return {
-            'protein_mapping_params': self.params,
-            'controls_abundances_mapped': self.controls_abundances_mapped,
-            'reference_protein_name': self.reference_protein,
-            'reference_protein_id': self.reference_protid,
-        }
+        return Context(
+            controls_abundances_mapped=self._controls_abundances_mapped,
+            reference_protein_name=self.reference_protein,
+            reference_protein_id=self._reference_protid,
+        )
 
-    def process(self, abundances_AU, **_):
-        abundances_mapped = self.apply_prtmap(abundances_AU, self.params)
-        return {'abundances_mapped': abundances_mapped}
+    def process(self, ctx: Context):
+        abundances_mapped = self._apply_prtmap(ctx.abundances_AU, self._regression_results)
+        return Context(abundances_mapped=abundances_mapped)
 
-    def diagnostics(self, controls_masks, protein_names, channel_names, nbins=300, **kw):
+    def diagnostics(self, ctx: Context, **kw):
+        nbins = kw.pop('nbins', 300)
 
-        fmap, _ = self.plot_mapping(protein_names, nbins=nbins, **kw)
+        fmap, _ = self.plot_mapping(ctx.protein_names, nbins=nbins, **kw)
 
         controls_abundances, std_models = utils.generate_controls_dict(
-            self.controls_abundances_mapped,
-            controls_masks,
-            protein_names,
+            self._controls_abundances_mapped,
+            ctx.controls_masks,
+            ctx.protein_names,
             **kw,
         )
 
         f, _ = plots.unmixing_plot(
             controls_abundances,
-            protein_names,
-            channel_names,
+            ctx.protein_names,
+            ctx.channel_names,
             **kw,
         )
         f.suptitle(f'Unmixing after protein mapping to {self.reference_protein}')
 
         classname = self.__class__.__name__
-        return {
-            f'diagnostics_{classname}': {
-                'mapping_regression': fmap,
-                f'unmixing_to_{self.reference_protein}_AU': f,
+        return Context().update(
+            {
+                f'diagnostics_{classname}': {
+                    'mapping_regression': fmap,
+                    f'unmixing_to_{self.reference_protein}_AU': f,
+                }
             }
-        }
+        )
 
     def plot_mapping(
         self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None, **kw
     ):
-        nprots = self.allprt_abundances.shape[1]
+        nprots = self._allprt_abundances.shape[1]
         fig, axes = plt.subplots(1, nprots - 1, figsize=(5 * (nprots - 1), 5))
         if nprots == 2:
             axes = [axes]
         # scatter each original abundances and plot regression line
-        refx = self.allprt_abundances[:, self.reference_protid]
+        refx = self._allprt_abundances[:, self._reference_protid]
         if target_bounds is None:
             target_bounds = np.quantile(refx, np.array([0.0001, 1]))
-        # log_target_bounds = self.logt(target_bounds) + np.array([-10, 10])
+        # log_target_bounds = self._logt(target_bounds) + np.array([-10, 10])
         j = 0
 
-        for i in range(self.allprt_abundances.shape[1]):
-            if i == self.reference_protid:
+        for i in range(self._allprt_abundances.shape[1]):
+            if i == self._reference_protid:
                 continue
             ax = axes[j]
-            otherx = self.allprt_abundances[:, i]
+            otherx = self._allprt_abundances[:, i]
             if other_bounds is None:
                 other_bounds = np.quantile(otherx, [0.001, 1])
-            log_other_bounds = self.logt(other_bounds) + np.array([-10, 10])
+            log_other_bounds = self._logt(other_bounds) + np.array([-10, 10])
 
             if logspace:
                 axtr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
@@ -145,13 +142,13 @@ class ProteinMapping(Task):
             plots.density_histogram2d(
                 ax, axtr(otherx), axtr(refx), xlims_tr, ylims_tr, nbins, noise_smooth=0.3
             )
-            # ax.scatter(tr(self.logt(otherx)), tr(self.logt(refx)), s=1, alpha=0.1)
+            # ax.scatter(tr(self._logt(otherx)), tr(self._logt(refx)), s=1, alpha=0.1)
             ax.set_xlim(*xlims_tr)
             ax.set_ylim(*ylims_tr)
 
             # transform other into ref
             xfwd = invtr(np.linspace(*axtr(other_bounds), 1000))
-            xprimefwd = self.apply_reg(xfwd, self.params[i])
+            xprimefwd = self._apply_reg(xfwd, self._regression_results[i])
 
             # # plot first a background line white
             ax.plot(axtr(xfwd), axtr(xprimefwd), lw=6, c='w', dashes=[1, 1])
@@ -166,20 +163,20 @@ class ProteinMapping(Task):
         return fig, axes
 
     @partial(jax.jit, static_argnums=(0,))
-    def regression(self, x, y, w, xbounds):
+    def _regression(self, x, y, w, xbounds):
         """returns the stacked_poly params to best express y as a function of x"""
-        x, y = self.logt(x), self.logt(y)
-        xbounds = self.logt(xbounds)
+        x, y = self._logt(x), self._logt(y)
+        xbounds = self._logt(xbounds)
         params = utils.fit_stacked_poly_uniform_spacing(
             x, y, w, *xbounds, self.model_resolution, self.model_degree, endpoint=True
         )
         return params
 
     @partial(jit, static_argnums=(0,))
-    def apply_reg(self, x, p):
-        xtr = self.logt(x)
+    def _apply_reg(self, x, p):
+        xtr = self._logt(x)
         xprime = utils.evaluate_stacked_poly(xtr, p)
-        return self.invlogt(xprime)
+        return self._invlogt(xprime)
 
-    def apply_prtmap(self, X, params):
-        return np.array([self.apply_reg(x, p) for x, p in zip(X.T, params)]).T
+    def _apply_prtmap(self, X, params):
+        return np.array([self._apply_reg(x, p) for x, p in zip(X.T, params)]).T

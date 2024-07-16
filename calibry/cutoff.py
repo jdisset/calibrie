@@ -10,54 +10,45 @@ from functools import partial
 from . import plots, utils
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple
+from .utils import Context
 
 
 class AbundanceCutoff(Task):
-    def __init__(
-        self,
-        cutoffs: Dict[str, float],
-        affects_controls=False,
-        **_,
-    ):
-        self.cutoffs = cutoffs
-        self.affects_controls = affects_controls
 
-    def initialize(
-        self,
-        protein_names,
-        controls_abundances_AU,
-        controls_masks,
-        controls_values,
-        **_,
-    ):
+    cutoffs: Dict[str, float] = {}
+    affects_controls: bool = False
+
+    def initialize(self, ctx: Context):
         if self.affects_controls:
-            r = self.process(protein_names, controls_abundances_AU)
-            controls_abundances_AU = r['abundances_AU']
-            self.deleted = r['deleted']
-            new_controls_masks = controls_masks[~self.deleted]
-            new_controls_values = controls_values[~self.deleted]
-            return {
-                'controls_abundances_AU': controls_abundances_AU,
-                'controls_masks': new_controls_masks,
-                'controls_values': new_controls_values,
-            }
+            r = self.process(
+                Context(
+                    protein_names=ctx.protein_names,
+                    abundances_AU=ctx.controls_abundances_AU
+                )
+            )
+            controls_abundances_AU = r.abundances_AU
+            self.deleted = r.deleted
+            new_controls_masks = ctx.controls_masks[~self.deleted]
+            new_controls_values = ctx.controls_values[~self.deleted]
+            return Context(
+                controls_abundances_AU=controls_abundances_AU,
+                controls_masks=new_controls_masks,
+                controls_values=new_controls_values
+            )
         else:
-            return {}
+            return Context()
 
-    def process(self, protein_names, abundances_AU, **_):
-        to_delete = np.zeros(len(abundances_AU), dtype=bool)
+    def process(self, ctx: Context):
+        to_delete = np.zeros(len(ctx.abundances_AU), dtype=bool)
         for pname, cutoff in self.cutoffs.items():
-            if pname not in protein_names:
-                self.log.warning(f'Protein {pname} not found in dataset')
+            if pname not in ctx.protein_names:
+                self._log.warning(f'Protein {pname} not found in dataset')
                 continue
-            protid = protein_names.index(pname)
-            new_to_delete = abundances_AU[:, protid] > cutoff
-            self.log.info(
+            protid = ctx.protein_names.index(pname)
+            new_to_delete = ctx.abundances_AU[:, protid] > cutoff
+            self._log.info(
                 f'Deleting {new_to_delete.sum()/len(to_delete)*100:.2f}% of events ({pname} > {cutoff})'
             )
             to_delete = to_delete | new_to_delete
-        new_abundances_AU = abundances_AU[~to_delete]
-        return {'abundances_AU': new_abundances_AU, 'deleted': to_delete}
-
-    def diagnostics(self):
-        pass
+        new_abundances_AU = ctx.abundances_AU[~to_delete]
+        return Context(abundances_AU=new_abundances_AU, deleted=to_delete)
