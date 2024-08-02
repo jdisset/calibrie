@@ -4,7 +4,8 @@ from matplotlib import scale as mscaleplo
 from matplotlib import transforms as mtransforms
 from matplotlib.ticker import FixedLocator, FuncFormatter
 import matplotlib.ticker as ticker
-import jax
+
+# import jax
 from . import utils
 
 ### {{{                    --     plot styling tools     --
@@ -244,6 +245,7 @@ class PowerFormatter(ticker.Formatter):
     def __init__(self, values, skip10=False):
         self.values = values
         self.skip10 = skip10
+
     def __call__(self, x, pos):
         v = self.values[pos]
         if self.skip10 and abs(v) == 10:
@@ -335,7 +337,8 @@ def fluo_scatter(
 
     for xid, ax in enumerate(axes):
         color = get_bio_color(pnames[xid])
-        xcoords = jax.random.normal(jax.random.PRNGKey(0), (rawx.shape[0],)) * 0.1
+        # xcoords = jax.random.normal(jax.random.PRNGKey(0), (rawx.shape[0],)) * 0.1
+        xcoords = np.random.normal(size=(rawx.shape[0],)) * 0.1
         ax.scatter(xcoords, rawx[:, xid], color=color, alpha=alpha, s=s, zorder=10, lw=0)
         if logscale:
             ax.set_yscale('symlog')
@@ -356,7 +359,7 @@ def fluo_scatter(
 
 
 def plot_fluo_distribution(ax, data, res=2000):
-    from jax.scipy.stats import gaussian_kde
+    from scipy.stats import gaussian_kde
 
     xmax = np.max(data)
     XX = np.linspace(0.0, 1.1 * xmax, res)
@@ -488,7 +491,6 @@ def plot_channels_to_reference(
                 xlims = np.quantile(x, quantiles_limits)
                 ylims = np.quantile(y, quantiles_limits)
 
-
             if logscale:
                 tr, itr, xlims_tr, ylims_tr = make_symlog_ax(ax, xlims, ylims)
                 x = tr(x)
@@ -547,12 +549,17 @@ def symlog(x, linthresh=50, linscale=0.4):
     x = x * sign
     return x
 
+
 def inverse_symlog(x, linthresh=50, linscale=0.4):
     # inverse of symlog
     sign = np.sign(x)
     x = np.abs(x)
     diff = np.log10(linthresh) * (1.0 - linscale)
-    x = np.where(x > linscale * np.log10(linthresh), np.power(10, x + diff), linthresh * x / (linscale * np.log10(linthresh)))
+    x = np.where(
+        x > linscale * np.log10(linthresh),
+        np.power(10, x + diff),
+        linthresh * x / (linscale * np.log10(linthresh)),
+    )
     x = x * sign
     return x
 
@@ -573,13 +580,23 @@ def powers_of_ten(xmin, xmax, skip10=False):
     return p10, subticks
 
 
+def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.5, skip10=True, margins=0.05):
+    """
+    Set the axis to a custom symlog-like scale, with the given limits and margins. 
+    Returns the transformation function, the inverse transformation function, the transformed xlims and the transformed ylims.
+    Args:
+            ax (matplotlib.axis): the axis to modify
+            xlims (tuple): the limits of the x axis
+            ylims (tuple): the limits of the y axis
+            linthresh (float, optional): the threshold at which the scale switches from linear-like (actually spline) to log. Defaults to 200.
+            linscale (float, optional): the compression factor of the linear part. Defaults to 0.4.
+            skip10 (bool, optional): whether to skip the 10 tick. Defaults to True.
+            margins (float, optional): the margins to add to the limits. Defaults to 0.05.
 
+    Returns:
+            tuple: the transformation function, the inverse transformation function, the transformed xlims and the transformed ylims
+    """
 
-
-def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.4, skip10=True, margins=0.05):
-    # ticks at all powers of 10:
-    # tr = partial(symlog, linthresh=linthresh, linscale=linscale)
-    # invtr = partial(inverse_symlog, linthresh=linthresh, linscale=linscale)
     tr = partial(utils.spline_biexponential, threshold=linthresh, compression=linscale)
     invtr = partial(utils.inverse_spline_biexponential, threshold=linthresh, compression=linscale)
     xlims_tr = xlims
@@ -589,19 +606,19 @@ def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.4, skip10=True, m
         xlims_tr = tr(np.asarray(xlims))
         xp10, xsub = powers_of_ten(*xlims, skip10=skip10)
         xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
-        ax.set_xlim(xlims_margin)
+        ax.set_xlim(tuple(xlims_margin))
         ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
-        ax.set_xticks(tr(xp10))
-        ax.set_xticks(tr(xsub), minor=True)
+        ax.set_xticks(list(tr(xp10)))
+        ax.set_xticks(list(tr(xsub)), minor=True)
 
     if ylims is not None:
         ylims_tr = tr(np.asarray(ylims))
         yp10, ysub = powers_of_ten(*ylims, skip10=skip10)
         ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
-        ax.set_ylim(ylims_margin)
+        ax.set_ylim(tuple(ylims_margin))
         ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
-        ax.set_yticks(tr(yp10))
-        ax.set_yticks(tr(ysub), minor=True)
+        ax.set_yticks(list(tr(yp10)))
+        ax.set_yticks(list(tr(ysub)), minor=True)
 
     ax.grid(which='major', alpha=0.5, ls='--', lw=0.5)
     return tr, invtr, xlims_tr, ylims_tr
@@ -627,7 +644,6 @@ CALIBRY_DEFAULT_DENSITY_CMAP = make_density_cmap('calibry_density', alpha_start=
 def density_histogram2d(
     ax, X, Y, xrange, yrange, nbins, cmap=None, vmin=0.01, vmax=1, noise_smooth=0
 ):
-
     if isinstance(nbins, int):
         nbins = (nbins, nbins)
 
@@ -783,7 +799,6 @@ def unmixing_plot(
                     )
                     ax.clabel(cnt, inline=True, fontsize=8, fmt='%.1f')
 
-
             ax.set_ylabel(f'{ctrl_name}')
             ax.set_xlabel(f'{prot_name}')
 
@@ -837,7 +852,6 @@ def range_plots(
         ax.add_patch(contour_circle)
 
     for i, (x, y) in enumerate(coords2d):
-
         absolute_radius = range_size * np.sqrt(ar[i])
         relative_radius = range_size * np.sqrt(rr[i])
         draw_clipped_circle(ax, x, y, absolute_radius, colors[i], clip_at=unsaturated_proportion[i])
@@ -885,6 +899,7 @@ def range_plots(
     fig.tight_layout()
 
     return fig, ax, coords2d
+
 
 def plot_raw_all_prot_crl(
     controls_values,
@@ -955,5 +970,3 @@ def plot_raw_all_prot_crl(
 
     fig.tight_layout()
     return fig, axes
-
-

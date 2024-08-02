@@ -23,9 +23,10 @@ channel_units:
   Pacific Blue : PacBlue
   AmCyan : MEAMCY
   FITC : MEFL
-  PerCP-Cy5.5 : MEPCY5
+  PerCP-Cy5.5 : MEPCY5 # MEPCY5.5 for koch fortessa
   PE : MEPE
   PE-Texas Red : MEPTR
   APC : MEAPC
   APC-Alexa 700 : MEAX700
   APC-Cy7 : MEAPCCY7
+

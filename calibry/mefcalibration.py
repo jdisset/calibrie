@@ -34,11 +34,11 @@ class MEFBeadsCalibration(Task):
     """
 
     beads_data: LoadedData
+    channel_units: LoadedConfig[Escaped[DictLike]] = (
+        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
+    )
     beads_mef_values: LoadedConfig[Escaped[DictLike[str, List[float]]]] = (
         'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@mef_values'
-    )
-    channel_units: LoadedConfig[Escaped[DictLike[str, str]]] = (
-        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
     )
     use_channels: Optional[Escaped[List[str]]] = None
     ignore_channels_with_missing_units: bool = False

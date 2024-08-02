@@ -34,6 +34,7 @@ from pydantic import BeforeValidator, PlainSerializer, WrapSerializer
 from typing import Annotated
 
 import importlib.resources as pkg_resources
+
 config_path = Path(str(pkg_resources.files('calibry') / 'config'))
 
 ## {{{                           --     types     --
@@ -44,7 +45,6 @@ PathLike = Union[str, Path]
 
 
 class ArbitraryModel(BaseModel):
-
     class Config:
         arbitrary_types_allowed = True
         validate_default = True
@@ -63,6 +63,7 @@ class ArbitraryModel(BaseModel):
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 MISSING = object()
+
 
 class KeyProvenance(ArbitraryModel):
     origin_class: str
@@ -161,7 +162,6 @@ class Context:
         assert isinstance(key, str), f'Key must be a string, got {key}'
         assert isinstance(self.container, dict), f'Container must be a dict, got {self.container}'
         if default is MISSING:
-            print(f'key = {key}, container = {self.container}')
             if key not in self.container:
                 kp = KeyProvenance.from_stack(inspect.stack(), key, stack_add_level)
                 raise KeyError(
@@ -192,7 +192,6 @@ class Context:
             else:
                 out[k] = v
         return out
-
 
 
 def generate_controls_dict(
@@ -232,7 +231,6 @@ def escape_name(name):
     return name.replace('-', '_').replace(' ', '_').upper().removesuffix('_A')
 
 
-
 def escape(x):
     if isinstance(x, str):
         return escape_name(x)
@@ -248,7 +246,6 @@ def escape(x):
             new_list[i] = escape(v)
         return new_list
     return x
-
 
 
 def astuple(x):
@@ -301,7 +298,6 @@ def serialize_loaded_data(df):
     return df.to_dict()
 
 
-
 LoadedData = Annotated[
     pd.DataFrame,
     BeforeValidator(partial(load_to_df, column_order=None)),
@@ -309,7 +305,6 @@ LoadedData = Annotated[
 ]
 
 Escaped = Annotated[T, BeforeValidator(escape)]
-
 
 
 DEFAULT_LOG_RESCALE = 10
@@ -363,46 +358,128 @@ def symlog(x, linthresh=50, scale=0.4):
     return x
 
 
+# def logb(x, base=10):
+# return jnp.log(x) / jnp.log(base)
+
+
+# @jit
+# def biexponential_transform(x, threshold=100, base=10, linscale=0.4):
+# def positive_half(x):
+# return jnp.where(
+# x > threshold, logb(x, base) * linscale, poly_forward_scaled(x, threshold, linscale)
+# )
+
+# return jnp.where(x > 0, positive_half(x), -positive_half(-x))
+
+
+# def cubic_exp_fwd(x, threshold, base, scale=1):
+# """
+# cubic polynomial that goes through (0,0) and has same first
+# and second derivative as the log function at the threshold
+# it appears monotonically increasing for x in [0, threshold]
+# although I haven't technically proven it
+# """
+# # assert base > 1 and scale > 0, 'Base must be > 1 and scale > 0'
+# # assert (
+# # 6 * logb(threshold, base) * scale > 5
+# # ), 'Threshold too small for given scale (or vice versa)'
+
+# logthresh = jnp.log(threshold)
+# logbase = jnp.log(base)
+# a = -0.5 * (3 - 2 * scale * logthresh) / (threshold**3 * logbase)
+# b = -(-4 + 3 * scale * logthresh) / (threshold**2 * logbase)
+# c = -0.5 * (5 - 6 * scale * logthresh) / (threshold * logbase)
+# return a * x**3 + b * x**2 + c * x
+
+
+# def cubic_exp_inv(y, threshold, base, scale):
+# """
+# inverse of cubic_exp_fwd (on [0,T])
+# """
+# # used wolfram to solve the analytical inverse
+# lT, lB, cb2 = jnp.log(threshold), jnp.log(base), jnp.cbrt(2)
+# T, T2, T3 = threshold, threshold**2, threshold**3
+# A = T3 * (
+# 56
+# + y * lB * (486 - 648 * scale * lT + 216 * scale**2 * lT**2)
+# - 522 * scale * lT
+# + 648 * scale**2 * lT**2
+# - 216 * scale**3 * lT**3
+# )
+# B = jnp.sqrt(4 * (-19 * T2 + 12 * scale * T2 * lT) ** 3 + A**2)
+# C = jnp.cbrt(A + B)
+# D = -9 + 6 * scale * lT
+# E = 2 * T * (-4 + 3 * scale * lT) / D
+# F = cb2 * (-19 * T2 + 12 * scale * T2 * lT)
+# return E - (F / (D * C)) + (C / (cb2 * D))
+
+
+# @jit
+# def spline_biexponential(x, threshold=100, base=10, compression=1):
+# """
+# biexponential function with smooth transition to cubic polynomial between [-threshold, threshold]
+# """
+# x = jnp.asarray(x)
+# sign = jnp.sign(x)
+# x = jnp.abs(x)
+# diff = logb(threshold) * (1.0 - compression)
+# x = jnp.where(
+# x > threshold,
+# logb(x, base) - diff,
+# cubic_exp_fwd(x, threshold, base=base, scale=compression),
+# )
+# return x * sign
+
+
+# @jit
+# def inverse_spline_biexponential(y, threshold=100, base=10, compression=1):
+# """
+# inverse of spline_biexponential
+# """
+# y = jnp.asarray(y)
+# sign = jnp.sign(y)
+# y = jnp.abs(y)
+# diff = logb(threshold) * (1.0 - compression)
+# transformed_threshold = cubic_exp_fwd(threshold, threshold, base=base, scale=compression)
+# y = jnp.where(
+# y > transformed_threshold,
+# base ** (y + diff),
+# cubic_exp_inv(y, threshold, base=base, scale=compression),
+# )
+# return y * sign
+
+
 def logb(x, base=10):
-    return jnp.log(x) / jnp.log(base)
+    """Compute log of x in base b."""
+    return np.log(x) / np.log(base)
 
 
-@jit
-def biexponential_transform(x, threshold=100, base=10, linscale=0.4):
-    def positive_half(x):
-        return jnp.where(
-            x > threshold, logb(x, base) * linscale, poly_forward_scaled(x, threshold, linscale)
-        )
-
-    return jnp.where(x > 0, positive_half(x), -positive_half(-x))
-
-
-def cubic_exp_fwd(x, threshold, base, scale=1):
+def cubic_exp_fwd(x, threshold, base, scale: float = 1):
     """
     cubic polynomial that goes through (0,0) and has same first
-    and second derivative as the log function at the threshold
-    it appears monotonically increasing for x in [0, threshold]
-    although I haven't technically proven it
-    """
-    # assert base > 1 and scale > 0, 'Base must be > 1 and scale > 0'
-    # assert (
-    # 6 * logb(threshold, base) * scale > 5
-    # ), 'Threshold too small for given scale (or vice versa)'
+    and second derivative as the log (in given base) at the threshold.
+    In other words, a spline that is log-like near the threshold.
 
-    logthresh = jnp.log(threshold)
-    logbase = jnp.log(base)
+    Args:
+    - x: input
+    - threshold: the value at which the function should be log-like
+    - base: the base of the logarithm
+    - scale: a parameter to squeeze (<1) or stretch (>1) the function
+    """
+    logthresh = np.log(threshold)
+    logbase = np.log(base)
     a = -0.5 * (3 - 2 * scale * logthresh) / (threshold**3 * logbase)
     b = -(-4 + 3 * scale * logthresh) / (threshold**2 * logbase)
     c = -0.5 * (5 - 6 * scale * logthresh) / (threshold * logbase)
     return a * x**3 + b * x**2 + c * x
 
 
-def cubic_exp_inv(y, threshold, base, scale):
+def cubic_exp_inv(y, threshold, base, scale: float):
     """
-    inverse of cubic_exp_fwd (on [0,T])
+    inverse of cubic_exp_fwd (on [0,threshold])
     """
-    # used wolfram to solve the analytical inverse
-    lT, lB, cb2 = jnp.log(threshold), jnp.log(base), jnp.cbrt(2)
+    # used wolfram to solve for the analytical inverse
+    lT, lB, cb2 = np.log(threshold), np.log(base), np.cbrt(2)
     T, T2, T3 = threshold, threshold**2, threshold**3
     A = T3 * (
         56
@@ -411,45 +488,59 @@ def cubic_exp_inv(y, threshold, base, scale):
         + 648 * scale**2 * lT**2
         - 216 * scale**3 * lT**3
     )
-    B = jnp.sqrt(4 * (-19 * T2 + 12 * scale * T2 * lT) ** 3 + A**2)
-    C = jnp.cbrt(A + B)
+    B = np.sqrt(4 * (-19 * T2 + 12 * scale * T2 * lT) ** 3 + A**2)
+    C = np.cbrt(A + B)
     D = -9 + 6 * scale * lT
     E = 2 * T * (-4 + 3 * scale * lT) / D
     F = cb2 * (-19 * T2 + 12 * scale * T2 * lT)
     return E - (F / (D * C)) + (C / (cb2 * D))
 
 
-@jit
-def spline_biexponential(x, threshold=100, base=10, compression=1):
+def spline_biexponential(x, threshold: float = 100, base: int = 10, compression: float = 0.5):
     """
-    biexponential function with smooth transition to cubic polynomial between [-threshold, threshold]
+    bi-logarithm function with smooth transition to cubic polynomial between [-threshold, threshold]
+
+    Args:
+    - x: input
+    - threshold: when the function should transition between log and spline
+    - base: the base of the logarithm
+    - compression: a parameter to squeeze (<1) or stretch (>1) the function in the spline region
     """
-    x = jnp.asarray(x)
-    sign = jnp.sign(x)
-    x = jnp.abs(x)
-    diff = logb(threshold) * (1.0 - compression)
-    x = jnp.where(
-        x > threshold,
-        logb(x, base) - diff,
-        cubic_exp_fwd(x, threshold, base=base, scale=compression),
+    x = np.asarray(x)
+    sign = np.sign(x)
+    x = np.abs(x)
+    diff = logb(threshold, base) * (1.0 - compression)
+    x = np.where(
+        x == 0,
+        0,
+        np.where(
+            x > threshold,
+            logb(x, base) - diff,
+            cubic_exp_fwd(x, threshold, base=base, scale=compression),
+        ),
     )
     return x * sign
 
 
-@jit
-def inverse_spline_biexponential(y, threshold=100, base=10, compression=1):
+def inverse_spline_biexponential(
+    y, threshold: float = 100, base: int = 10, compression: float = 0.5
+):
     """
-    inverse of spline_biexponential
+    inverse of log_poly_log
     """
-    y = jnp.asarray(y)
-    sign = jnp.sign(y)
-    y = jnp.abs(y)
-    diff = logb(threshold) * (1.0 - compression)
+    y = np.asarray(y)
+    sign = np.sign(y)
+    y = np.abs(y)
+    diff = logb(threshold, base) * (1.0 - compression)
     transformed_threshold = cubic_exp_fwd(threshold, threshold, base=base, scale=compression)
-    y = jnp.where(
-        y > transformed_threshold,
-        base ** (y + diff),
-        cubic_exp_inv(y, threshold, base=base, scale=compression),
+    y = np.where(
+        y == 0,
+        0,
+        np.where(
+            y > transformed_threshold,
+            base ** (y + diff),
+            cubic_exp_inv(y, threshold, base=base, scale=compression),
+        ),
     )
     return y * sign
 
@@ -541,7 +632,6 @@ def cmap_spline(
     w = 0.25 * np.ones_like(Y)
 
     xknots = [np.quantile(X[:, c], spline_knots_at_quantile) for c in range(X.shape[1])]
-    print(f'xknots = {xknots}')
 
     x_linear_transition_lower = np.quantile(
         X, switch_to_linear_at_quantile[0], axis=0

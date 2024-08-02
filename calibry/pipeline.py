@@ -3,7 +3,7 @@ from rich.logging import RichHandler
 from calibry.utils import ArbitraryModel, Context
 
 from typing import List, Dict, Any, Optional, Union
-from pydantic import Field
+from pydantic import Field, ConfigDict
 
 
 MISSING = object()
@@ -11,6 +11,7 @@ MISSING = object()
 
 class Task(ArbitraryModel):
 
+    model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
     def initialize(self, ctx: Context) -> Context:
         return Context()
@@ -22,6 +23,7 @@ class Task(ArbitraryModel):
         pass
 
     __hash__ = object.__hash__
+
 
 
 class Pipeline(ArbitraryModel):

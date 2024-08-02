@@ -108,15 +108,18 @@ class LoadControls(Task):
 
 
     def process(self, ctx):
-        data = ut.load_to_df(ctx.pipeline_input, self.use_channels).values
+        loader = ctx.get('cell_data_loader', ut.load_to_df)
+
+        data = loader(ctx.pipeline_input, self.use_channels).values
         assert data.shape[1] == len(self._channel_names)
         return Context(observations_raw=data)
 
 
     def initialize(self, ctx):
+        loader = ctx.get('cell_data_loader', ut.load_to_df)
 
         self._controls = {
-            ut.astuple(ut.escape(k)): ut.load_to_df(v, self.use_channels)
+            ut.astuple(ut.escape(k)): loader(v, self.use_channels)
             for k, v in self.color_controls.items()
         }
 
