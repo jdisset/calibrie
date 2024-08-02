@@ -49,12 +49,14 @@ class UIElement:
         getter: Optional[Callable] = None,
         setter: Optional[Callable] = None,
         elt_type: Optional[Type] = None,
+        in_component: Optional[Any] = None,
         **kwargs,
     ):
         self.kwargs = kwargs
         self.setter = setter
         self.getter = getter
         self.elt_type = elt_type
+        self.in_component = in_component
         self._tag = unique_tag()
 
     def add(self, parent: int | str, **kwargs) -> int | str:
@@ -81,7 +83,6 @@ def get_first_UIEltSpec(metadata):
 
 
 class Component(BaseModel):
-
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
     def model_post_init(self, *args):
@@ -115,7 +116,7 @@ class Component(BaseModel):
             **kwargs,
         }
 
-        uielt = uispec.ui_type(**kw)
+        uielt = uispec.ui_type(in_component=self, **kw)
         uielt.add(parent=parent)
 
     def add(self, parent, **kwargs) -> int | str:
@@ -130,8 +131,6 @@ class Component(BaseModel):
 
     def delete(self):
         dpg.delete_item(self._tag)
-
-
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -246,6 +245,9 @@ def prepare_ui(ui, parent, **kwargs):
         if not ui._tag:
             ui._tag = unique_tag()
 
+    if 'in_component' in kw:
+        ui.in_component = kw.pop('in_component')
+
     label = kw.get('label', '')
 
     def default_callback(sender, app_data, user_data):
@@ -302,7 +304,13 @@ class AutoUI(UIElement):
             self.elt_type = type(field_value)
 
         if issubclass(self.elt_type, str):
-            self._underlying = TextUI(getter=self.getter, setter=self.setter, elt_type=str, **kw)
+            self._underlying = TextUI(
+                in_component=self.in_component,
+                getter=self.getter,
+                setter=self.setter,
+                elt_type=str,
+                **kw,
+            )
             return self._underlying.add(parent)
         elif issubclass(self.elt_type, int):
             return dpg.add_input_int(**kw)
@@ -414,7 +422,7 @@ class ListManager(UIElement):
         self._ui_items.append(item_ui)
 
         if self.on_add_callback is not None:
-            self.on_add_callback(item)
+            self.on_add_callback(self.in_component, item)
 
         return item_ui._tag
 
@@ -466,7 +474,7 @@ class ListManager(UIElement):
         item = this_list[index]
         ui_item = self._ui_items[index]
         if self.on_delete_callback is not None:
-            self.on_delete_callback(item, ui_item)
+            self.on_delete_callback(self.in_component, item, ui_item)
         del item
 
         grp_tag = self._item_tag_to_group.pop(ui_item._tag)

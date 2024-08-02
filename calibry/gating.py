@@ -544,18 +544,26 @@ class GatingFiles(Component):
             ListManager,
             item_type=DataFile,
             add_button_callback=add_new_file,
-            on_add_callback=lambda f: new_file_added(f),
-            on_delete_callback=lambda f, _: file_deleted(f),
+            on_add_callback=lambda self, f: self._new_file_added(f),
+            on_delete_callback=lambda self, f, _: self._file_deleted(f),
             button_label='Load File(s)',
         ),
     ] = []
     # Field(
-        # default_factory=lambda: [
-            # DataFile(
-                # path='/Users/jeandisset/Dropbox (MIT)/Biocomp_v2/Experiments/2024-02-18_BPv4_BPv5/data/raw/2024-02-18_BPv4_BPv5_19.fcs'
-            # )
-        # ]
+    # default_factory=lambda: [
+    # DataFile(
+    # path='/Users/jeandisset/Dropbox (MIT)/Biocomp_v2/Experiments/2024-02-18_BPv4_BPv5/data/raw/2024-02-18_BPv4_BPv5_19.fcs'
     # )
+    # ]
+    # )
+
+    def _new_file_added(self, file):
+        for gate in self._gating_task.gates:
+            gate.add_datafile(file)
+
+    def _file_deleted(self, file):
+        for gate in self._gating_task.gates:
+            gate.delete_datafile(file)
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -578,6 +586,11 @@ class PolygonGate(Component):
 
     def model_post_init(self, *args, **kwargs):
         super().model_post_init(*args, **kwargs)
+        self._btn = None
+        self._plot = None
+        self._drawer = None
+        self._mainwin = None
+        self._ui_grp_kwargs = None
 
     def add_datafile(self, datafile):
         self._plot.add_series(DataframeSerie(dataframe=datafile.df, name=datafile.path))
@@ -627,6 +640,9 @@ class PolygonGate(Component):
     def add(self, parent, **kwargs):
         self._drawer: PolygonDrawer = PolygonDrawer()
         self._plot: DistributionPlot = DistributionPlot()
+
+        self.add_window()
+
         self._drawer.adding_enabled = True
         if len(self.vertices) > 0:
             # we populate the drawer with the vertices
@@ -635,7 +651,6 @@ class PolygonGate(Component):
                 self._drawer.add_point(x, y, screen_space=False)
         self._drawer.on_update = self.update_plot
 
-        self.add_window()
         self._ui_grp_kwargs = {'horizontal': True}
         tag = super().add(parent=self._mainwin, **kwargs)  # add the name, xchannel, ychannel fields
         # move it to _mainwin, because for some reason it's not working when added to parent
@@ -709,6 +724,7 @@ def density_histogram2d(
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
+
 ## {{{                        --     GatingTask     --
 class GatingTask(Task, Component):
     gates: Annotated[
@@ -716,11 +732,15 @@ class GatingTask(Task, Component):
         make_ui_field(
             ListManager,
             item_type=PolygonGate,
-            on_add_callback=lambda g: new_gate_added(g),
+            on_add_callback=lambda self, g: self._new_gate_added(g),
         ),
     ] = []
 
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
+
+    def _new_gate_added(self, gate):
+        for file in self._gating_files.files:
+            gate.add_datafile(file)
 
     def initialize(self, ctx: Any) -> Any:
         return {'cell_data_loader': self.load_cells}
@@ -747,6 +767,8 @@ class GatingTask(Task, Component):
         resample_to=250000,
         nbins=200,
         density_lims=(1e-6, None),
+        figsize=(12, 12),
+        dpi=200,
         **_,
     ) -> Any:
         assert use_files, "No files selected"
@@ -771,11 +793,11 @@ class GatingTask(Task, Component):
 
         n_figures = len(gates_per_axis_pair)
         # compute best layout:
-        best_n_cols = int(np.ceil(np.sqrt(n_figures)))
+        best_n_cols = max(int(np.ceil(np.sqrt(n_figures))), 1)
         n_cols = min(best_n_cols, 3)
-        n_rows = int(np.ceil(n_figures / n_cols))
+        n_rows = max(int(np.ceil(n_figures / n_cols)), 1)
 
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(7*n_cols, 7*n_rows), dpi=200)
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=dpi)
         if not isinstance(axes, np.ndarray):
             axes = np.array([axes])
         flat_axes = axes.flatten()
@@ -831,7 +853,6 @@ class GatingTask(Task, Component):
                         va='center',
                     )
 
-
             ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
             ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
 
@@ -844,8 +865,8 @@ class GatingTask(Task, Component):
         stat_text = f"Total events kept: {len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
 
         fig.text(0.5, 0.01, stat_text, ha='center', va='center', fontsize=12)
-
         fig.tight_layout()
+
         return fig
 
 

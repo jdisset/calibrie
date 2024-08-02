@@ -9,7 +9,7 @@ description = "A set of tools and utils for fluorescence data calibration."
 authors = [{name = "Jean Disset", email = "jdisset@mit.edu"}]
 readme = "README.md"
 dependencies = [
-	"pydantic"
+	"pydantic",
 	"dearpygui",
 	"shapely",
 	"numpy",
@@ -25,4 +25,4 @@ dependencies = [
 ]
 
 [project.scripts]
-calibry-gating= "calibry.scripts.gating"
+calibry-gating = "calibry.scripts.gating_ui:main"

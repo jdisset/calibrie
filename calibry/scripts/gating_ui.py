@@ -1,44 +1,13 @@
 import xdialog
 import dearpygui.dearpygui as dpg
 import dracon as dr
-from calibry.gating import GatingTask, GatingFiles
+from calibry.gating import GatingTask, GatingFiles, PolygonGate
 import numpy as np
 import pandas as pd
 
-START_WIDTH = 1100
-START_HEIGHT = 900
+START_WIDTH = 1300
+START_HEIGHT = 1000
 LEFT_PANEL_WIDTH = 340
-N = int(1e5)
-dfs = [
-    pd.DataFrame({'x': np.random.normal(0, 1000, N), 'y': np.random.normal(0, 1000, N)})
-    for _ in range(3)
-]
-
-dpg.create_context()
-dpg.create_viewport(title='Calibry Gating', width=START_WIDTH, height=START_HEIGHT)
-dpg.setup_dearpygui()
-
-
-gating_task = GatingTask()
-gating_files = GatingFiles()
-
-
-def new_file_added(file):
-    global gating_task
-    for gate in gating_task.gates:
-        gate.add_datafile(file)
-
-
-def file_deleted(file):
-    global gating_task
-    for gate in gating_task.gates:
-        gate.delete_datafile(file)
-
-
-def new_gate_added(gate):
-    global gating_files
-    for file in gating_files.files:
-        gate.add_datafile(file)
 
 
 def export():
@@ -60,7 +29,7 @@ def load_gating_task(file):
 
 
 def load():
-    file = xdialog.open_file("Open gating task", filetypes=[('gating_task', '*.yaml')])
+    file = xdialog.open_file("Open gating task")
     global gating_task
     new_gating_task = load_gating_task(file)
     print(f'Loaded gating task: {new_gating_task}')
@@ -72,64 +41,110 @@ def load():
 
 
 def detailed_diagnostics():
-    fig = gating_task.diagnostics(None, use_files=gating_files.files)
-    # save to in memory png:
-    from io import BytesIO
 
-    buf = BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    png = buf.read()
-    buf.close()
+
+    # use a image backend
+    from io import BytesIO
+    import matplotlib
+    matplotlib.use('Agg')
+    IMSIZE = 800
+    dpi = 100
+    empty_image = np.zeros((IMSIZE, IMSIZE, 4)).flatten().tolist()
 
     # create window if it doesn't exist
     if not dpg.does_item_exist('detailed_diagnostics'):
         dpg.add_window(
-            tag='detailed_diagnostics', width=800, height=800, label='Detailed Diagnostics'
+            tag='detailed_diagnostics', width=IMSIZE, height=IMSIZE, label='Detailed Diagnostics'
         )
         # show the image in it
+        # create the texture:
+        with dpg.texture_registry(show=False):
+            dpg.add_dynamic_texture(
+                width=IMSIZE, height=IMSIZE, tag="detailed_diagnostics_texture", default_value=empty_image,
+            )
+
         dpg.add_image(
-            'detailed_diagnostics_image',
-            value=fig,
-            width=800,
-            height=800,
+            'detailed_diagnostics_texture',
             parent='detailed_diagnostics',
         )
+
     else:
-        dpg.set_value('detailed_diagnostics_image', png)
         dpg.show_item('detailed_diagnostics')
         dpg.focus_item('detailed_diagnostics')
 
 
-with dpg.window(tag='calibrygating', pos=(0, 0)):
-    # Theme setting
-    dpg.set_primary_window('calibrygating', True)
-    with dpg.child_window(
-        label="parameters",
-        width=LEFT_PANEL_WIDTH,
-        height=-1,
-        pos=[0, 0],
-        tag='left_panel',
-    ):
-        dpg.add_spacer(height=8)
-        dpg.add_text("Gates")
-        dpg.add_separator()
-        gating_task.add('left_panel', indent=5)
-        dpg.add_spacer(height=5)
-        dpg.add_separator()
-        dpg.add_text("Data")
-        gating_files.add('left_panel')
-        dpg.add_spacer(height=5)
-        dpg.add_separator()
-        dpg.add_button(label='Generate Detailed Diagnostics', callback=detailed_diagnostics)
+    if not gating_files.files:
+        with dpg.window(modal=True, autosize=True) as p:
+            dpg.add_text('No files selected', parent=p)
+        return
 
-    # add a menu with an export button
-    with dpg.menu_bar():
-        with dpg.menu(label='File'):
-            dpg.add_menu_item(label='Load', callback=load)
-            dpg.add_menu_item(label='Export to yaml', callback=export)
+    if not dpg.does_item_exist('loading-detailed-diagnostics'):
+        dpg.add_loading_indicator(parent='detailed_diagnostics', tag='loading-detailed-diagnostics')
 
-dpg.show_viewport()
-dpg.start_dearpygui()
-dpg.destroy_context()
-print(f'Gating task: {gating_task}')
+    dpg.show_item('loading-detailed-diagnostics')
+
+    fig = gating_task.diagnostics(
+        None,
+        use_files=[f.path for f in gating_files.files],
+        figsize=(IMSIZE / dpi, IMSIZE / dpi),
+        dpi=dpi,
+    )
+
+    fig.tight_layout(pad=0)
+    fig.canvas.draw()
+
+    image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    assert image_from_plot.shape[0] == IMSIZE * IMSIZE * 3, f'Expected {IMSIZE * IMSIZE * 3}, got {image_from_plot.shape[0]}'
+    # it's flat, which is fine, but we need to add the alpha channel (every 4th element)
+    image_rgba = image_from_plot.reshape((IMSIZE, IMSIZE, 3)).astype(np.float32) / 255
+    image_rgba = np.concatenate((image_rgba, np.ones((IMSIZE, IMSIZE, 1))), axis=2)
+    image_as_float = image_rgba.flatten().tolist()
+    dpg.set_value('detailed_diagnostics_texture', image_as_float)
+    dpg.hide_item('loading-detailed-diagnostics')
+
+
+
+def main():
+    global gating_task, gating_files
+
+    dpg.create_context()
+    dpg.create_viewport(title='Calibry Gating', width=START_WIDTH, height=START_HEIGHT)
+    dpg.setup_dearpygui()
+    gating_task = GatingTask()
+    gating_files = GatingFiles()
+
+    gating_task._gating_files = gating_files
+    gating_files._gating_task = gating_task
+
+    with dpg.window(tag='calibrygating', pos=(0, 0)):
+        # Theme setting
+        dpg.set_primary_window('calibrygating', True)
+        with dpg.child_window(
+            label="parameters",
+            width=LEFT_PANEL_WIDTH,
+            height=-1,
+            pos=[0, 0],
+            tag='left_panel',
+        ):
+            dpg.add_spacer(height=8)
+            dpg.add_text("Gates")
+            dpg.add_separator()
+            gating_task.add('left_panel', indent=5)
+            dpg.add_spacer(height=5)
+            dpg.add_separator()
+            dpg.add_text("Data")
+            gating_files.add('left_panel')
+            dpg.add_spacer(height=5)
+            dpg.add_separator()
+            dpg.add_button(label='Generate Detailed Diagnostics', callback=detailed_diagnostics)
+
+        # add a menu with an export button
+        with dpg.menu_bar():
+            with dpg.menu(label='File'):
+                dpg.add_menu_item(label='Load', callback=load)
+                dpg.add_menu_item(label='Export to yaml', callback=export)
+
+    dpg.show_viewport()
+    dpg.start_dearpygui()
+    dpg.destroy_context()
+    print(f'Gating task: {gating_task}')
