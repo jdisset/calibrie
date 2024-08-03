@@ -22,6 +22,7 @@ dependencies = [
 	"jax",
 	"tqdm",
 	"scipy",
+	"xdialog",
 ]
 
 [project.scripts]
