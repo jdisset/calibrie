@@ -87,6 +87,7 @@ class Component(BaseModel):
 
     def model_post_init(self, *args):
         super().model_post_init(*args)
+        self._on_change_callbacks: dict[str, list[Callable[[Component, str], Any]]] = {}
         self._tag = unique_tag()
         if not hasattr(self, '_ui_fields_kwargs'):
             self._ui_fields_kwargs = {}
@@ -131,6 +132,25 @@ class Component(BaseModel):
 
     def delete(self):
         dpg.delete_item(self._tag)
+
+    def __setattr__(self, name, value):
+        old_value = getattr(self, name, None)
+        super().__setattr__(name, value)
+        self._on_change(name, old_value)
+
+    def register_on_change_callback(self, attr_name, callback):
+        if attr_name not in self._on_change_callbacks:
+            self._on_change_callbacks[attr_name] = []
+        self._on_change_callbacks[attr_name].append(callback)
+
+    def _on_change(self, attr_name, old_value):
+        print(f'On change: {attr_name} = {getattr(self, attr_name)}')
+        if attr_name in self._on_change_callbacks:
+            for callback in self._on_change_callbacks[attr_name]:
+                callback(self, attr_name)
+
+
+
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -333,6 +353,18 @@ class AutoUI(UIElement):
 def make_ui_field(ui_type: Type[UIElement] = AutoUI, **kwargs):
     return UIEltSpec(ui_type, **kwargs)
 
+def make_ui_elt(container, field_name, ui_type: Type[UIElement]=AutoUI, **kwargs):
+    if not hasattr(container, '_ui_fields_kwargs'):
+        container._ui_fields_kwargs = {}
+    container._ui_fields_kwargs[field_name] = kwargs
+
+    def getter():
+        return getattr(container, field_name)
+
+    def setter(value):
+        setattr(container, field_name, value)
+
+    return ui_type(in_component=container, getter=getter, setter=setter, **kwargs)
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 

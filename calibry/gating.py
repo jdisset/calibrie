@@ -1,10 +1,5 @@
 ## {{{                          --     import     --
-from typing import (
-    Annotated,
-    List,
-    Any,
-    Optional,
-)
+from typing import Annotated, List, Any, Optional, Callable
 from calibry.plots import CALIBRY_DEFAULT_DENSITY_CMAP, make_symlog_ax
 import pandas as pd
 import shapely.geometry as sg
@@ -20,8 +15,17 @@ from calibry.utils import spline_biexponential, inverse_spline_biexponential
 from pydantic import BaseModel, Field, ConfigDict
 from numpy.typing import NDArray
 import numpy as np
-from calibry.calibrygui import Component, make_ui_field, unique_tag, ListManager, TextUI, DropdownUI
+from calibry.calibrygui import (
+    Component,
+    make_ui_field,
+    unique_tag,
+    ListManager,
+    TextUI,
+    DropdownUI,
+    make_ui_elt,
+)
 from matplotlib import pyplot as plt
+from copy import deepcopy
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
@@ -73,16 +77,13 @@ def invtr(y):
     return inverse_spline_biexponential(y, threshold=THRESHOLD, compression=COMPRESSION)
 
 
-def make_dpg_symlog_ax(axis, lims, skip10=False):
-    lims_tr = tr(np.array(lims))
+def make_dpg_symlog_ax(axis, lims, skip10=False, transform=tr):
     p10, subticks = powers_of_ten(*lims, skip10=skip10)
-    major_ticks = tuple(zip([format_tick_label(p) for p in p10], tr(p10)))
+    major_ticks = tuple(zip([format_tick_label(p) for p in p10], transform(p10)))
     # a trick to get the major ticks to show up stronger since dpg doesn't support minor ticks:
-    major_ticks_again = tuple(zip(['' for p in p10], tr(p10)))
-    minor_ticks = tuple(zip(['' for p in subticks], tr(subticks)))
+    major_ticks_again = tuple(zip(['' for p in p10], transform(p10)))
+    minor_ticks = tuple(zip(['' for p in subticks], transform(subticks)))
     dpg.set_axis_ticks(axis, minor_ticks + major_ticks + major_ticks_again * 2)
-
-    return tr, invtr, lims_tr
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -101,7 +102,8 @@ def random_color(hue_range=(0, 1), saturation_range=(0.4, 0.8), value_range=(0.9
 
 class PolygonDrawer:
     def __init__(self):
-        self.vertices = []
+        self.screen_space_vertices = []
+        self.data_space_vertices = []
         self.adding_enabled = False
         self.delete_enabled = False
         self.color = random_color()
@@ -109,8 +111,7 @@ class PolygonDrawer:
         self.y_axis = None
         self.controls_parent = None
         self.line_series_tag = None
-        self.coord_transform_to_screen = tr
-        self.inv_coord_transform = invtr
+        self.transform: Transform = LinearTransform()
         self.on_update = None
 
     def setup_themes(self):
@@ -156,6 +157,10 @@ class PolygonDrawer:
         dpg.bind_item_handler_registry(self.plot, registry)
 
         self.line_series_tag = dpg.add_line_series([], [], parent=self.y_axis)
+        # we actually want to put the line series on top of the scatter series
+        # so we need to make sure it's the last item in the y_axis group
+        dpg.move_item(self.line_series_tag, -1)
+
         self.apply_button_theme()
 
     def update_color(self, sender, app_data, user_data):
@@ -194,7 +199,7 @@ class PolygonDrawer:
         return np.argmin(dists)
 
     def find_closest_segment(self, x, y):
-        if len(self.vertices) < 2:
+        if len(self.screen_space_vertices) < 2:
             return None
 
         coords = self.get_point_coords(loop=True)
@@ -220,11 +225,11 @@ class PolygonDrawer:
         x, y = dpg.get_plot_mouse_pos()
         self.add_point(x, y)
 
-    def add_point(self, x, y, screen_space=True):
-        if not screen_space:
-            x, y = self.coord_transform_to_screen(np.array([x, y]))
-
+    def add_point(self, x, y, screen_space=True, closest=True):
         assert self.plot is not None, "No plot, you need to call add() first"
+
+        if not screen_space:
+            x, y = self.transform.fwd(np.array([x, y]))
 
         p = dpg.add_drag_point(
             default_value=(x, y),
@@ -234,16 +239,17 @@ class PolygonDrawer:
             show_label=False,
         )
 
+
+        append_at = len(self.screen_space_vertices)
+
         # let's find the closest point in the series:
+        if closest:
+            closest_p = self.find_closest_segment(x, y)
+            if closest_p is not None:
+                append_at = closest_p + 1
 
-        append_at = 0
+        self.screen_space_vertices.insert(append_at, p)
 
-        closest = self.find_closest_segment(x, y)
-        if closest is not None:
-            print("closest segment:", closest)
-            append_at = closest + 1
-
-        self.vertices.insert(append_at, p)
         self.update_polygon()
 
     def delete_point(self):
@@ -252,35 +258,51 @@ class PolygonDrawer:
         x, y = dpg.get_plot_mouse_pos()
         closest = self.find_closest_point(x, y)
         if closest is not None:
-            dpg.delete_item(self.vertices.pop(closest))
+            dpg.delete_item(self.screen_space_vertices.pop(closest))
             self.update_polygon()
 
     def update_point(self, sender, app_data, user_data):
         self.update_polygon()
 
     def delete_all_points(self):
-        for point in self.vertices:
+        for point in self.screen_space_vertices:
             dpg.delete_item(point)
-        self.vertices = []
+        self.screen_space_vertices = []
         self.update_polygon()
 
-    def get_point_coords(self, loop=False, transform=False):
-        coords = [dpg.get_value(p) for p in self.vertices]
-        if loop:
-            coords.append(coords[0])
-        coords = np.array(coords)
-        if transform:
-            coords = self.inv_coord_transform(coords)
+    def transform_changed(self):
+        if len(self.screen_space_vertices) > 0:
+            assert len(self.data_space_vertices) == len(self.screen_space_vertices)
+            data_space_copy = deepcopy(self.data_space_vertices)
+            self.delete_all_points()
+            for dx, dy in data_space_copy:
+                self.add_point(dx, dy, screen_space=False, closest=False)
+
+    def get_point_coords(self, loop=False, in_data_space=False):
+        coords = np.array(self.data_space_vertices.copy())
+        if loop and len(coords) > 0:
+            coords = np.vstack([coords, coords[0]])
+
+        if not in_data_space:
+            coords = self.transform.fwd(coords)
         return coords
 
     def update_polygon(self):
-        if len(self.vertices) > 2:
-            coords = self.get_point_coords(loop=True).T.tolist()
-            dpg.set_value(self.line_series_tag, coords)
-        else:
-            dpg.set_value(self.line_series_tag, [[], []])
+        # update the data space vertices, using screen_space as source of truth
+        self.data_space_vertices = [
+            self.transform.inv(np.array(dpg.get_value(p))[:2]) for p in self.screen_space_vertices
+        ]
 
-        dpg.bind_item_theme(self.line_series_tag, self.line_series_theme)
+        if len(self.screen_space_vertices) > 2:
+            coords = self.get_point_coords(loop=True).T.tolist()
+            if dpg.does_item_exist(self.line_series_tag):
+                dpg.set_value(self.line_series_tag, coords)
+        else:
+            if dpg.does_item_exist(self.line_series_tag):
+                dpg.set_value(self.line_series_tag, [[], []])
+
+        if dpg.does_item_exist(self.line_series_tag):
+            dpg.bind_item_theme(self.line_series_tag, self.line_series_theme)
 
         if self.on_update:
             self.on_update(self)
@@ -347,14 +369,15 @@ class DataframeSerie(Component):
         return self.dataframe[axis].max()
 
     def resample(self, sender, app_data, user_data):
+        assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         self._resampled_df = get_resampled(self.dataframe, int(app_data))
-        self.set_series_value()
+        self._parentplot.update_series()
 
-    def set_series_value(self):
+    def set_series_value(self, fwd_transform):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         assert self._series is not None, "You need to call add() first"
         xaxis, yaxis = self._parentplot.xaxis, self._parentplot.yaxis
-        data = tr(self._resampled_df[[xaxis, yaxis]].values).T.tolist()
+        data = fwd_transform(self._resampled_df[[xaxis, yaxis]].values).T.tolist()
         dpg.set_value(self._series, data)
 
     def update_color(self, sender, app_data, user_data):
@@ -398,17 +421,48 @@ class DataframeSerie(Component):
 
         self.setup_theme()
         self._resampled_df = get_resampled(self.dataframe, self.resample_to)
-        self.set_series_value()
+        self._parentplot.update_series()
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 ## {{{                         --     dplot     --
 
 
+class Transform:
+    def fwd(self, x) -> NDArray: ...
+
+    def inv(self, y) -> NDArray: ...
+
+
+class LinearTransform(Transform):
+    def fwd(self, x):
+        return x
+
+    def inv(self, y):
+        return y
+
+
+class SymlogTransform(Transform):
+    def __init__(self, threshold=200, compression=0.4):
+        self.threshold = threshold
+        self.compression = compression
+
+    def fwd(self, x):
+        # original data space -> transformed "screen" space
+        return spline_biexponential(x, threshold=self.threshold, compression=self.compression)
+
+    def inv(self, y):
+        # transformed "screen" space -> original data space
+        return inverse_spline_biexponential(
+            y, threshold=self.threshold, compression=self.compression
+        )
+
+
 class DistributionPlot(Component):
     xaxis: str = ''
     yaxis: str = ''
     series: List[DataframeSerie] = []
+    transform: Transform = Field(default_factory=SymlogTransform)
 
     def model_post_init(self, *a, **k):
         super().model_post_init(*a, **k)
@@ -427,14 +481,27 @@ class DistributionPlot(Component):
 
     def update_series(self):
         if len(self.series) > 0:
-            xmin = min([df.get_min(self.xaxis) for df in self.series])
-            xmax = max([df.get_max(self.xaxis) for df in self.series])
-            ymin = min([df.get_min(self.yaxis) for df in self.series])
-            ymax = max([df.get_max(self.yaxis) for df in self.series])
-            make_dpg_symlog_ax(self._x_axis, (min(xmin, AX_MIN), max(xmax * 10, xmax)))
-            make_dpg_symlog_ax(self._y_axis, (min(ymin, AX_MIN), max(ymax * 10, ymax)))
             for serie in self.series:
-                serie.set_series_value()
+                serie.set_series_value(self.transform.fwd)
+
+            if not isinstance(self.transform, LinearTransform):
+                xmin = min([df.get_min(self.xaxis) for df in self.series])
+                xmax = max([df.get_max(self.xaxis) for df in self.series])
+                ymin = min([df.get_min(self.yaxis) for df in self.series])
+                ymax = max([df.get_max(self.yaxis) for df in self.series])
+                make_dpg_symlog_ax(
+                    self._x_axis,
+                    (min(xmin, AX_MIN), max(xmax * 10, xmax)),
+                    transform=self.transform.fwd,
+                )
+                make_dpg_symlog_ax(
+                    self._y_axis,
+                    (min(ymin, AX_MIN), max(ymax * 10, ymax)),
+                    transform=self.transform.fwd,
+                )
+            else:
+                dpg.reset_axis_ticks(self._x_axis)
+                dpg.reset_axis_ticks(self._y_axis)
 
     def add_series(self, serie):
         self.series.append(serie)
@@ -444,16 +511,31 @@ class DistributionPlot(Component):
         dpg.fit_axis_data(self._x_axis)
         dpg.fit_axis_data(self._y_axis)
 
+    def _transform_changed(self, sender, app_data, user_data):
+        if app_data == "Symlog":
+            self.transform = SymlogTransform()
+        else:
+            self.transform = LinearTransform()
+        self.update_series()
+
     def add(self, parent, **_):
+        self._transform_dropdown = dpg.add_combo(
+            items=["Log-Spline-Log", "Linear"],
+            default_value="Symlog",
+            parent=parent,
+            callback=self._transform_changed,
+            width=80,
+        )
+
         self._plot = dpg.add_plot(
             label="Events",
             no_box_select=True,
             height=-20,
             width=-1,
             no_menus=True,
-            equal_aspects=True,
+            # equal_aspects=True,
             no_mouse_pos=True,
-            fit_button=True,
+            # fit_button=True,
             parent=parent,
         )
         self._legend = dpg.add_plot_legend(parent=self._plot)
@@ -514,16 +596,12 @@ class DataFile(Component):
         path_short = Path(self.path).name if self.path else 'None'
         if 'tag' in kwargs:
             self._tag = kwargs['tag']
-        # allow dragging the file to the plot
         dpg.add_text(
             f"{truncate(path_short,17)} ({len(self.df)} rows)",
             parent=parent,
             tag=self._tag,
             user_data=self,
-            # payload_type='DataFile',
-            # drag_callback=lambda: print('dragged'),
         )
-        # dpg.add_drag_payload(parent=self.tag, drag_data="Payload Data")
 
     def _toggle_use(self, sender, app_data, user_data):
         self.use = app_data
@@ -549,13 +627,6 @@ class GatingFiles(Component):
             button_label='Load File(s)',
         ),
     ] = []
-    # Field(
-    # default_factory=lambda: [
-    # DataFile(
-    # path='/Users/jeandisset/Dropbox (MIT)/Biocomp_v2/Experiments/2024-02-18_BPv4_BPv5/data/raw/2024-02-18_BPv4_BPv5_19.fcs'
-    # )
-    # ]
-    # )
 
     def _new_file_added(self, file):
         for gate in self._gating_task.gates:
@@ -570,7 +641,6 @@ class GatingFiles(Component):
 
 # -- TASK
 ## {{{                        --     PolygonGate     --
-
 
 class PolygonGate(Component):
     vertices: List[List[float]] = []
@@ -622,7 +692,7 @@ class PolygonGate(Component):
         dpg.set_item_label(self._plot._y_axis, self.ychannel)
         self._plot.update_series()
         # get coords from drawer and populate the vertices
-        vertices = self._drawer.get_point_coords(transform=True)
+        vertices = self._drawer.get_point_coords(in_data_space=True)
         if len(vertices) > 0:
             vertices = vertices[:, :2]
         self.vertices = vertices.tolist()
@@ -637,16 +707,24 @@ class PolygonGate(Component):
             parent_tag=self._mainwin, plot_tag=self._plot._plot, y_axis=self._plot._y_axis
         )
 
+    def _transform_changed(self, *args, **kwargs):
+        if self._plot is not None and self._drawer is not None:
+            self._drawer.transform = self._plot.transform
+            self._drawer.transform_changed()
+
     def add(self, parent, **kwargs):
         self._drawer: PolygonDrawer = PolygonDrawer()
         self._plot: DistributionPlot = DistributionPlot()
+        self._plot.register_on_change_callback('transform', self._transform_changed)
+
+        self._plot.transform = SymlogTransform()
 
         self.add_window()
 
         self._drawer.adding_enabled = True
         if len(self.vertices) > 0:
             # we populate the drawer with the vertices
-            self._drawer.vertices.clear()
+            self._drawer.screen_space_vertices.clear()
             for x, y in self.vertices:
                 self._drawer.add_point(x, y, screen_space=False)
         self._drawer.on_update = self.update_plot
