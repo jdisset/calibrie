@@ -30,11 +30,13 @@ def load_gating_task(file):
 
 def load():
     file = xdialog.open_file("Open gating task")
-    global gating_task
+    global gating_task, gating_files
     new_gating_task = load_gating_task(file)
     print(f'Loaded gating task: {new_gating_task}')
     for gate in new_gating_task.gates:
         gate.delete()
+    new_gating_task._gating_files = gating_files
+    gating_files._gating_task = new_gating_task
     gating_task.delete()
     gating_task = new_gating_task
     gating_task.add('left_panel', indent=5)
