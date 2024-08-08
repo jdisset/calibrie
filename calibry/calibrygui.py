@@ -144,7 +144,6 @@ class Component(BaseModel):
         self._on_change_callbacks[attr_name].append(callback)
 
     def _on_change(self, attr_name, old_value):
-        print(f'On change: {attr_name} = {getattr(self, attr_name)}')
         if attr_name in self._on_change_callbacks:
             for callback in self._on_change_callbacks[attr_name]:
                 callback(self, attr_name)

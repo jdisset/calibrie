@@ -513,14 +513,27 @@ class DistributionPlot(Component):
             self.transform = LinearTransform()
         self.update_series()
 
+    def resample_all(self, sender, app_data, user_data):
+        for serie in self.series:
+            serie.resample(sender, app_data, user_data)
+
     def add(self, parent, **_):
-        self._transform_dropdown = dpg.add_combo(
-            items=["Symlog", "Linear"],
-            default_value="Symlog",
-            parent=parent,
-            callback=self._transform_changed,
-            width=80,
-        )
+        with dpg.group(parent=parent, horizontal=True):
+            self._transform_dropdown = dpg.add_combo(
+                items=["Symlog", "Linear"],
+                default_value="Symlog",
+                callback=self._transform_changed,
+                width=80,
+            )
+            # add a global resampling slider:
+            self._resample_slider = dpg.add_slider_int(
+                label="Resample all to",
+                min_value=0,
+                max_value=500000,
+                default_value=DEFAULT_RESAMPLE_TO,
+                width=130,
+                callback=self.resample_all,
+            )
 
         self._plot = dpg.add_plot(
             label="Events",
@@ -825,10 +838,10 @@ class GatingTask(Task, Component):
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
     def _new_gate_added(self, gate):
-        assert hasattr(self, '_gating_files'), "No _gating_files attribute"
         gate.register_on_change_callback('_apply', self._gate_apply_changed)
-        for file in self._gating_files.files:
-            gate.add_datafile(file)
+        if hasattr(self, '_gating_files'):
+            for file in self._gating_files.files:
+                gate.add_datafile(file)
 
     def _gate_apply_changed(self, gate, old_value=None):
         print(f"gate {gate.name} apply changed from {old_value} to {gate._apply}")
