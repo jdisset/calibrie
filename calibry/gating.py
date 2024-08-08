@@ -531,7 +531,7 @@ class DistributionPlot(Component):
                 min_value=0,
                 max_value=500000,
                 default_value=DEFAULT_RESAMPLE_TO,
-                width=130,
+                width=220,
                 callback=self.resample_all,
             )
 

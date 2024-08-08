@@ -445,7 +445,7 @@ class ListManager(UIElement):
 
         with dpg.group(indent=1, parent=self._tag) as item_grp:
             del_button = dpg.add_button(
-                label="-", callback=self._remove_item, user_data=index, parent=item_grp
+                label="-", callback=self._remove_item, user_data=index, parent=item_grp, tag=f'delbtn_{item_ui._tag}'
             )
             item_ui.add(parent=item_grp)
             self._item_tag_to_group[item_ui._tag] = item_grp
@@ -496,6 +496,11 @@ class ListManager(UIElement):
 
             ui_item.getter = it_getter
             ui_item.setter = it_setter
+
+        # also we need to update all the indexes in user_data of the delete buttons
+        for i, ui_item in enumerate(self._ui_items):
+            dpg.configure_item(f'delbtn_{ui_item._tag}', user_data=i)
+
 
     def _remove_item(self, sender, app_data, user_data):
         assert self.setter is not None, 'Setter not bound'

@@ -449,9 +449,9 @@ def symlog(x, linthresh=50, scale=0.4):
 # return y * sign
 
 
-def logb(x, base=10):
+def logb(x, base=10, **kwargs):
     """Compute log of x in base b."""
-    return np.log(x) / np.log(base)
+    return np.log(x, **kwargs) / np.log(base)
 
 
 def cubic_exp_fwd(x, threshold, base, scale: float = 1):
@@ -511,13 +511,9 @@ def spline_biexponential(x, threshold: float = 100, base: int = 10, compression:
     x = np.abs(x)
     diff = logb(threshold, base) * (1.0 - compression)
     x = np.where(
-        x == 0,
-        0,
-        np.where(
-            x > threshold,
-            logb(x, base) - diff,
-            cubic_exp_fwd(x, threshold, base=base, scale=compression),
-        ),
+        x > threshold,
+        logb(x, base, where=x > 0) - diff,
+        cubic_exp_fwd(x, threshold, base=base, scale=compression),
     )
     return x * sign
 
@@ -534,13 +530,9 @@ def inverse_spline_biexponential(
     diff = logb(threshold, base) * (1.0 - compression)
     transformed_threshold = cubic_exp_fwd(threshold, threshold, base=base, scale=compression)
     y = np.where(
-        y == 0,
-        0,
-        np.where(
-            y > transformed_threshold,
-            base ** (y + diff),
-            cubic_exp_inv(y, threshold, base=base, scale=compression),
-        ),
+        y > transformed_threshold,
+        base ** (y + diff),
+        cubic_exp_inv(y, threshold, base=base, scale=compression),
     )
     return y * sign
 
