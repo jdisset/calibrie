@@ -104,7 +104,7 @@ class PolygonDrawer:
     def __init__(self):
         self.screen_space_vertices = []
         self.data_space_vertices = []
-        self.adding_enabled = False
+        self.adding_enabled = True
         self.delete_enabled = False
         self.color = random_color()
         self.plot = None
@@ -140,7 +140,6 @@ class PolygonDrawer:
         self.plot = plot_tag
         self.y_axis = y_axis
 
-        self.setup_themes()
 
         with dpg.group(parent=self.controls_parent, horizontal=True):
             self.add_btn = dpg.add_button(label="Add Points", callback=self.toggle_adding)
@@ -157,15 +156,12 @@ class PolygonDrawer:
         dpg.bind_item_handler_registry(self.plot, registry)
 
         self.line_series_tag = dpg.add_line_series([], [], parent=self.y_axis)
-        # we actually want to put the line series on top of the scatter series
-        # so we need to make sure it's the last item in the y_axis group
-        dpg.move_item(self.line_series_tag, -1)
 
+        self.setup_themes()
         self.apply_button_theme()
 
     def update_color(self, sender, app_data, user_data):
         self.color = [int(c * 255.0) for c in app_data]
-        print("color:", self.color)
         dpg.set_value(self.line_color_tag, self.color)
         self.update_polygon()
 
@@ -238,7 +234,6 @@ class PolygonDrawer:
             callback=self.update_point,
             show_label=False,
         )
-
 
         append_at = len(self.screen_space_vertices)
 
@@ -520,7 +515,7 @@ class DistributionPlot(Component):
 
     def add(self, parent, **_):
         self._transform_dropdown = dpg.add_combo(
-            items=["Log-Spline-Log", "Linear"],
+            items=["Symlog", "Linear"],
             default_value="Symlog",
             parent=parent,
             callback=self._transform_changed,
@@ -637,10 +632,12 @@ class GatingFiles(Component):
             gate.delete_datafile(file)
 
 
+
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 # -- TASK
 ## {{{                        --     PolygonGate     --
+
 
 class PolygonGate(Component):
     vertices: List[List[float]] = []
@@ -661,6 +658,7 @@ class PolygonGate(Component):
         self._drawer = None
         self._mainwin = None
         self._ui_grp_kwargs = None
+        self._apply = False
 
     def add_datafile(self, datafile):
         self._plot.add_series(DataframeSerie(dataframe=datafile.df, name=datafile.path))
@@ -669,6 +667,10 @@ class PolygonGate(Component):
         for serie in self._plot.series:
             if serie.dataframe is datafile.df:
                 self._plot.remove_series(None, None, serie.unique_id)
+
+    def delete_all_datafiles(self):
+        for serie in self._plot.series:
+            self._plot.remove_series(None, None, serie.unique_id)
 
     def __call__(self, df):
         if len(self.vertices) < 3:
@@ -733,6 +735,12 @@ class PolygonGate(Component):
         tag = super().add(parent=self._mainwin, **kwargs)  # add the name, xchannel, ychannel fields
         # move it to _mainwin, because for some reason it's not working when added to parent
         self._btn = dpg.add_button(label='focus', callback=self.focus, parent=parent)
+        self._apply_cbox = dpg.add_checkbox(
+            label='Apply',
+            default_value=False,
+            parent=parent,
+            callback=lambda s, a, u: setattr(self, '_apply', a),
+        )
         self.update_plot()
         return tag
 
@@ -817,8 +825,23 @@ class GatingTask(Task, Component):
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
     def _new_gate_added(self, gate):
+        assert hasattr(self, '_gating_files'), "No _gating_files attribute"
+        gate.register_on_change_callback('_apply', self._gate_apply_changed)
         for file in self._gating_files.files:
             gate.add_datafile(file)
+
+    def _gate_apply_changed(self, gate, old_value=None):
+        print(f"gate {gate.name} apply changed from {old_value} to {gate._apply}")
+        if hasattr(self, '_gating_files'):
+            for file in self._gating_files.files:
+                file.load()
+            for gate in self.gates:
+                if gate._apply:
+                    for file in self._gating_files.files:
+                        file.df = gate(file.df)
+                gate.delete_all_datafiles()
+                for file in self._gating_files.files:
+                    gate.add_datafile(file)
 
     def initialize(self, ctx: Any) -> Any:
         return {'cell_data_loader': self.load_cells}
@@ -843,7 +866,7 @@ class GatingTask(Task, Component):
         ctx: Any,
         use_files: list,
         resample_to=250000,
-        nbins=200,
+        nbins=300,
         density_lims=(1e-6, None),
         figsize=(12, 12),
         dpi=200,
@@ -940,10 +963,9 @@ class GatingTask(Task, Component):
 
         after_all_gates = self.apply_all_gates(df)
         percent = (len(after_all_gates) / len(df)) * 100
-        stat_text = f"Total events kept: {len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
-
-        fig.text(0.5, 0.01, stat_text, ha='center', va='center', fontsize=12)
-        fig.tight_layout()
+        stat_text = f"Total events kept after gating:\n{len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
+        fig.suptitle(stat_text)
+        # fig.tight_layout()
 
         return fig
 

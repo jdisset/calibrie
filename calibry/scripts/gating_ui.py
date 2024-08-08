@@ -41,45 +41,62 @@ def load():
 
 
 def detailed_diagnostics():
-
-
     # use a image backend
     from io import BytesIO
     import matplotlib
+
     matplotlib.use('Agg')
-    IMSIZE = 800
-    dpi = 100
+    WINSIZE = 800
+    IMSIZE = 3000
+    dpi = 300
     empty_image = np.zeros((IMSIZE, IMSIZE, 4)).flatten().tolist()
 
     # create window if it doesn't exist
     if not dpg.does_item_exist('detailed_diagnostics'):
         dpg.add_window(
-            tag='detailed_diagnostics', width=IMSIZE, height=IMSIZE, label='Detailed Diagnostics'
+            tag='detailed_diagnostics', width=WINSIZE, height=WINSIZE, label='Detailed Diagnostics'
         )
+        if not dpg.does_item_exist('loading-detailed-diagnostics'):
+            dpg.add_loading_indicator(
+                parent='detailed_diagnostics', tag='loading-detailed-diagnostics'
+            )
         # show the image in it
         # create the texture:
         with dpg.texture_registry(show=False):
             dpg.add_dynamic_texture(
-                width=IMSIZE, height=IMSIZE, tag="detailed_diagnostics_texture", default_value=empty_image,
+                width=IMSIZE,
+                height=IMSIZE,
+                tag="detailed_diagnostics_texture",
+                default_value=empty_image,
             )
 
-        dpg.add_image(
-            'detailed_diagnostics_texture',
+        with dpg.plot(
+            label="Image Plot",
+            height=-1,
+            width=-1,
             parent='detailed_diagnostics',
-        )
-
+            no_menus=True,
+            no_mouse_pos=True,
+            equal_aspects=True,
+        ) as dpg_plot:
+            dpg.add_plot_legend()
+            dpg.add_plot_axis(
+                dpg.mvXAxis, label="", no_gridlines=True, no_tick_marks=True, no_tick_labels=True, tag='diag_xaxis'
+            )
+            with dpg.plot_axis(
+                dpg.mvYAxis, label="", no_gridlines=True, no_tick_marks=True, no_tick_labels=True, tag='diag_yaxis'
+            ) as yax:
+                dpg.add_image_series(
+                    "detailed_diagnostics_texture", [0, 0], [IMSIZE, IMSIZE], label=""
+                )
     else:
         dpg.show_item('detailed_diagnostics')
         dpg.focus_item('detailed_diagnostics')
-
 
     if not gating_files.files:
         with dpg.window(modal=True, autosize=True) as p:
             dpg.add_text('No files selected', parent=p)
         return
-
-    if not dpg.does_item_exist('loading-detailed-diagnostics'):
-        dpg.add_loading_indicator(parent='detailed_diagnostics', tag='loading-detailed-diagnostics')
 
     dpg.show_item('loading-detailed-diagnostics')
 
@@ -94,14 +111,17 @@ def detailed_diagnostics():
     fig.canvas.draw()
 
     image_from_plot = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-    assert image_from_plot.shape[0] == IMSIZE * IMSIZE * 3, f'Expected {IMSIZE * IMSIZE * 3}, got {image_from_plot.shape[0]}'
+    assert (
+        image_from_plot.shape[0] == IMSIZE * IMSIZE * 3
+    ), f'Expected {IMSIZE * IMSIZE * 3}, got {image_from_plot.shape[0]}'
     # it's flat, which is fine, but we need to add the alpha channel (every 4th element)
     image_rgba = image_from_plot.reshape((IMSIZE, IMSIZE, 3)).astype(np.float32) / 255
     image_rgba = np.concatenate((image_rgba, np.ones((IMSIZE, IMSIZE, 1))), axis=2)
     image_as_float = image_rgba.flatten().tolist()
     dpg.set_value('detailed_diagnostics_texture', image_as_float)
     dpg.hide_item('loading-detailed-diagnostics')
-
+    dpg.fit_axis_data('diag_xaxis')
+    dpg.fit_axis_data('diag_yaxis')
 
 
 def main():
@@ -127,13 +147,15 @@ def main():
             tag='left_panel',
         ):
             dpg.add_spacer(height=8)
-            dpg.add_text("Gates")
-            dpg.add_separator()
-            gating_task.add('left_panel', indent=5)
-            dpg.add_spacer(height=5)
             dpg.add_separator()
             dpg.add_text("Data")
             gating_files.add('left_panel')
+
+            dpg.add_spacer(height=8)
+            dpg.add_text("Gates")
+            dpg.add_separator()
+            gating_task.add('left_panel', indent=5)
+
             dpg.add_spacer(height=5)
             dpg.add_separator()
             dpg.add_button(label='Generate Detailed Diagnostics', callback=detailed_diagnostics)
