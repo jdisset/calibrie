@@ -2,6 +2,7 @@
 from typing import Annotated, List, Any, Optional, Callable
 from calibry.plots import CALIBRY_DEFAULT_DENSITY_CMAP, make_symlog_ax
 import pandas as pd
+import copy
 import shapely.geometry as sg
 import time
 import dracon as dr
@@ -345,7 +346,6 @@ class DataframeSerie(Component):
         self.color[3] = int(self.alpha * 255)
         with dpg.theme() as theme:
             with dpg.theme_component(dpg.mvScatterSeries):
-
                 # dpg.add_theme_style(
                 # dpg.mvPlotStyleVar_Marker,
                 # dpg.mvPlotMarker_Cross,
@@ -888,14 +888,20 @@ def density_histogram2d(
     Y,
     xrange,
     yrange,
-    nbins,
+    nbins,  # nbins on the largest axis
     cmap=None,
     vmin: Optional[float] = 0.01,
     vmax: Optional[float] = 1,
     noise_smooth=0,
 ):
     if isinstance(nbins, int):
-        nbins = (nbins, nbins)
+        ranges = np.asarray([xrange, yrange])
+        max_range = np.max(np.abs(np.diff(ranges, axis=1)))
+        nbins = np.round(nbins * np.abs(np.diff(ranges, axis=1)) / max_range)
+        nbins = tuple(nbins.flatten().astype(int))
+        print(f"nbins: {nbins}")
+
+        # nbins = (nbins, nbins)
 
     xres = np.abs(np.subtract(*xrange)) / nbins[0]
     yres = np.abs(np.subtract(*yrange)) / nbins[1]
@@ -915,6 +921,10 @@ def density_histogram2d(
     if cmap is None:
         cmap = CALIBRY_DEFAULT_DENSITY_CMAP
 
+    # make colors < vmin transparent in the colormap
+    cmap = copy.copy(cmap)
+    cmap.set_under(alpha=0)
+
     ax.imshow(
         h,
         extent=[*xrange, *yrange],
@@ -923,6 +933,7 @@ def density_histogram2d(
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
+        interpolation='nearest',
     )
 
 
@@ -988,19 +999,15 @@ class GatingTask(Task, Component):
         ctx: Any,
         use_files: list,
         resample_to=100000,
-        nbins=300,
-        density_lims=(1e-4, None),
+        nbins=400,
+        density_lims=(1e-6, None),
         figsize=(12, 12),
         dpi=200,
         **_,
     ) -> Any:
         assert use_files, "No files selected"
 
-        all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files])
-
-        all_columns = all_data_df.columns
-        print("all columns:", all_columns)
-
+        all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files]).sample(frac=1)
         df = get_resampled(all_data_df, resample_to)
 
         # create a plot for each gates groupd by the same x and y axis
@@ -1057,26 +1064,15 @@ class GatingTask(Task, Component):
                         x, y = vertices.T
                     else:
                         y, x = vertices.T
-                    ax.plot(x, y, color=gcol, lw=3)
-                    ax.fill(x, y, color=gcol, alpha=0.2)
-                    rightmost = vertices[np.argmax(vertices[:, 0])]
                     after_applying = gate(df)
                     percent = (len(after_applying) / len(df)) * 100
                     stat_text = f"{gate.name}: {len(after_applying)}/{len(df)} ({percent:.1f}\%)"
-
-                    ax.text(
-                        rightmost[0],
-                        rightmost[1],
-                        stat_text,
-                        color='black',
-                        weight='bold',
-                        backgroundcolor=gcol,
-                        ha='left',
-                        va='center',
-                    )
+                    ax.plot(x, y, color=gcol, lw=3, label=stat_text)
+                    ax.fill(x, y, color=gcol, alpha=0.2)
 
             ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
             ax.axhline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
+            ax.legend()
 
             ax.set_aspect('equal')
             ax.set_xlabel(xaxis)

@@ -48,9 +48,9 @@ def detailed_diagnostics():
     import matplotlib
 
     matplotlib.use('Agg')
-    WINSIZE = 800
+    WINSIZE = 1000
     IMSIZE = 3000
-    dpi = 300
+    dpi = 400
     empty_image = np.zeros((IMSIZE, IMSIZE, 4)).flatten().tolist()
 
     # create window if it doesn't exist
