@@ -3,6 +3,7 @@ from typing import Annotated, List, Any, Optional, Callable
 from calibry.plots import CALIBRY_DEFAULT_DENSITY_CMAP, make_symlog_ax
 import pandas as pd
 import shapely.geometry as sg
+import time
 import dracon as dr
 import matplotlib.colors as mcolors
 import dearpygui.dearpygui as dpg
@@ -140,7 +141,6 @@ class PolygonDrawer:
         self.plot = plot_tag
         self.y_axis = y_axis
 
-
         with dpg.group(parent=self.controls_parent, horizontal=True):
             self.add_btn = dpg.add_button(label="Add Points", callback=self.toggle_adding)
             self.del_btn = dpg.add_button(label="Del Points", callback=self.toggle_deleting)
@@ -155,7 +155,9 @@ class PolygonDrawer:
             )
         dpg.bind_item_handler_registry(self.plot, registry)
 
-        self.line_series_tag = dpg.add_line_series([], [], parent=self.y_axis)
+        self.line_series_tag = dpg.add_line_series(
+            [], [], parent=self.y_axis, before='__plot_ui_layer'
+        )
 
         self.setup_themes()
         self.apply_button_theme()
@@ -319,7 +321,8 @@ AX_MIN = -10000
 
 
 class DataframeSerie(Component):
-    dataframe: pd.DataFrame
+    # dataframe: pd.DataFrame
+    datafile: 'DataFile'
     name: str
     resample_to: int = DEFAULT_RESAMPLE_TO
     color: List[int] = Field(default_factory=random_color)
@@ -332,7 +335,6 @@ class DataframeSerie(Component):
     def model_post_init(self, *a, **k):
         super().model_post_init(*a, **k)
         self._series = None
-        self._shuffled_df = self.dataframe.sample(frac=1)
         self._parentplot = None
 
     def setup_theme(self):
@@ -358,21 +360,21 @@ class DataframeSerie(Component):
         dpg.bind_item_theme(self._series, self._theme)
 
     def get_min(self, axis):
-        return self.dataframe[axis].min()
+        return self.datafile.df[axis].min()
 
     def get_max(self, axis):
-        return self.dataframe[axis].max()
+        return self.datafile.df[axis].max()
 
     def resample(self, sender, app_data, user_data):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
-        self._resampled_df = get_resampled(self.dataframe, int(app_data))
+        self.datafile.resample_to(int(app_data))
         self._parentplot.update_series()
 
     def set_series_value(self, fwd_transform):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         assert self._series is not None, "You need to call add() first"
         xaxis, yaxis = self._parentplot.xaxis, self._parentplot.yaxis
-        data = fwd_transform(self._resampled_df[[xaxis, yaxis]].values).T.tolist()
+        data = fwd_transform(self.datafile._resampled_df[[xaxis, yaxis]].values).T.tolist()
         dpg.set_value(self._series, data)
 
     def update_color(self, sender, app_data, user_data):
@@ -386,23 +388,21 @@ class DataframeSerie(Component):
     def add(self, parent, **kwargs):
         assert self._parentplot is not None, "need a parent plot"
         self._series = dpg.add_scatter_series(
-            [], [], label=self.name, parent=self._parentplot._y_axis
+            [], [], label=self.name, parent=self._parentplot._y_axis, before='__plot_data_layer'
         )
 
         with dpg.group(parent=self._series):
-            dpg.add_button(
-                label="Remove", callback=self._parentplot.remove_series, user_data=self.unique_id
-            )
             dpg.add_color_edit(
                 default_value=self.color,
                 no_inputs=True,
                 no_alpha=True,
                 callback=self.update_color,
             )
-            dpg.add_slider_int(
-                label="Resample to",
+            dpg.add_drag_int(
+                label=f"Resample to (out of {len(self.datafile.df)} points)",
                 min_value=0,
-                max_value=len(self.dataframe),
+                max_value=len(self.datafile.df),
+                width=100,
                 callback=self.resample,
                 default_value=self.resample_to,
             )
@@ -415,7 +415,7 @@ class DataframeSerie(Component):
             )
 
         self.setup_theme()
-        self._resampled_df = get_resampled(self.dataframe, self.resample_to)
+        self.datafile.resample_to(self.resample_to)
         self._parentplot.update_series()
 
 
@@ -468,8 +468,6 @@ class DistributionPlot(Component):
         assert len(self.series) > 0, "No series to remove"
         uid = user_data
         all_uids = [s.unique_id for s in self.series]
-        print("all uids:", all_uids)
-        print("uid:", uid)
         i = all_uids.index(uid)
         s = self.series.pop(i)
         dpg.delete_item(s._series)
@@ -498,6 +496,11 @@ class DistributionPlot(Component):
                 dpg.reset_axis_ticks(self._x_axis)
                 dpg.reset_axis_ticks(self._y_axis)
 
+    def remove_all_series(self):
+        for serie in self.series:
+            dpg.delete_item(serie._series)
+        self.series = []
+
     def add_series(self, serie):
         self.series.append(serie)
         serie._parentplot = self
@@ -517,6 +520,10 @@ class DistributionPlot(Component):
         for serie in self.series:
             serie.resample(sender, app_data, user_data)
 
+    def update_alpha(self, sender, app_data, user_data):
+        for serie in self.series:
+            serie.update_alpha(sender, app_data, user_data)
+
     def add(self, parent, **_):
         with dpg.group(parent=parent, horizontal=True):
             self._transform_dropdown = dpg.add_combo(
@@ -525,14 +532,24 @@ class DistributionPlot(Component):
                 callback=self._transform_changed,
                 width=80,
             )
+
             # add a global resampling slider:
-            self._resample_slider = dpg.add_slider_int(
-                label="Resample all to",
+            self._resample_slider = dpg.add_drag_int(
+                label="Max points per file",
                 min_value=0,
                 max_value=500000,
                 default_value=DEFAULT_RESAMPLE_TO,
-                width=220,
+                width=100,
                 callback=self.resample_all,
+            )
+            # add a global alpha slider:
+            self._alpha_slider = dpg.add_drag_float(
+                label="Alpha",
+                min_value=0,
+                max_value=1,
+                default_value=0.1,
+                width=50,
+                callback=self.update_alpha,
             )
 
         self._plot = dpg.add_plot(
@@ -555,8 +572,12 @@ class DistributionPlot(Component):
             dpg.mvYAxis, label=self.yaxis, no_gridlines=True, parent=self._plot
         )
 
+        dpg.add_line_series([], [], parent=self._y_axis, tag='__plot_data_layer')
+
         for serie in self.series:
             serie.add(parent=self._plot)
+
+        dpg.add_line_series([], [], parent=self._y_axis, tag='__plot_ui_layer')
 
         # don't show grid lines:
         with dpg.theme() as theme:
@@ -595,10 +616,24 @@ class DataFile(Component):
         self.load()
 
     def load(self):
+        global AVAILABLE_AXIS
         df = calibry.utils.load_to_df(self.path)
         assert isinstance(df, pd.DataFrame), f"Expected a DataFrame, got {type(df)}"
         self.df = df
-        AVAILABLE_AXIS.update(df.columns)
+
+        available_axis = {str(c) for c in df.columns}
+        available_axis.update(set(AVAILABLE_AXIS))
+        if 'N/A' in available_axis:
+            available_axis.remove('N/A')
+        AVAILABLE_AXIS = sorted(list(available_axis))
+
+        self._shuffled_df = self.df.sample(frac=1)
+        self._resampled_df = get_resampled(self._shuffled_df, DEFAULT_RESAMPLE_TO)
+
+    def resample_to(self, n):
+        resample_proportion = n / len(self.df)
+        p = int(resample_proportion * len(self._shuffled_df))
+        self._resampled_df = get_resampled(self._shuffled_df, p)
 
     def add(self, parent, **kwargs):
         path_short = Path(self.path).name if self.path else 'None'
@@ -645,12 +680,22 @@ class GatingFiles(Component):
             gate.delete_datafile(file)
 
 
-
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 # -- TASK
 ## {{{                        --     PolygonGate     --
 
+
+def points_in_polygon(polygon, pts):
+    edge1, edge2 = polygon, np.roll(polygon, -1, axis=0)
+    on_edge = np.any((pts[:, None] == polygon).all(-1), axis=1)
+    horizontal_cross = (edge1[:, 1] > pts[:, None, 1]) != (edge2[:, 1] > pts[:, None, 1])
+    slope = (pts[:, None, 0] - edge1[:, 0]) * (edge2[:, 1] - edge1[:, 1]) - (
+        edge2[:, 0] - edge1[:, 0]
+    ) * (pts[:, None, 1] - edge1[:, 1])
+    on_edge |= np.any((horizontal_cross) & (slope == 0), axis=1)
+    crossings = np.sum(horizontal_cross & ((slope < 0) != (edge2[:, 1] < edge1[:, 1])), axis=1)
+    return on_edge | (crossings % 2 == 1)
 
 class PolygonGate(Component):
     vertices: List[List[float]] = []
@@ -674,7 +719,7 @@ class PolygonGate(Component):
         self._apply = False
 
     def add_datafile(self, datafile):
-        self._plot.add_series(DataframeSerie(dataframe=datafile.df, name=datafile.path))
+        self._plot.add_series(DataframeSerie(datafile=datafile, name=Path(datafile.path).stem))
 
     def delete_datafile(self, datafile):
         for serie in self._plot.series:
@@ -689,12 +734,10 @@ class PolygonGate(Component):
         if len(self.vertices) < 3:
             return df
 
-        poly = sg.Polygon(np.asarray(self.vertices))
-
-        def is_in_poly(row):
-            return sg.Point(row[self.xchannel], row[self.ychannel]).within(poly)
-
-        return df[df.apply(is_in_poly, axis=1)]
+        mask = points_in_polygon(
+            np.asarray(self.vertices), df[[self.xchannel, self.ychannel]].values
+        )
+        return df[mask]
 
     def attr_changed(self, attr_name, old_value=None):
         print(f'attr {attr_name} changed from {old_value} to {getattr(self, attr_name)}')
@@ -846,15 +889,19 @@ class GatingTask(Task, Component):
     def _gate_apply_changed(self, gate, old_value=None):
         print(f"gate {gate.name} apply changed from {old_value} to {gate._apply}")
         if hasattr(self, '_gating_files'):
-            for file in self._gating_files.files:
-                file.load()
+            # apply all gates
             for gate in self.gates:
-                if gate._apply:
-                    for file in self._gating_files.files:
-                        file.df = gate(file.df)
-                gate.delete_all_datafiles()
                 for file in self._gating_files.files:
-                    gate.add_datafile(file)
+                    if gate._apply:
+                        t0 = time.time()
+                        file._shuffled_df = gate(file.df)
+                        print(f"gate {gate.name} applied in {time.time() - t0:.2f}s")
+                    else:
+                        file._shuffled_df = file.df.sample(frac=1)
+                    file.resample_to(len(file._resampled_df))
+
+            for gate in self.gates:
+                gate.update_plot()
 
     def initialize(self, ctx: Any) -> Any:
         return {'cell_data_loader': self.load_cells}
@@ -878,9 +925,9 @@ class GatingTask(Task, Component):
         self,
         ctx: Any,
         use_files: list,
-        resample_to=250000,
+        resample_to=100000,
         nbins=300,
-        density_lims=(1e-6, None),
+        density_lims=(1e-4, None),
         figsize=(12, 12),
         dpi=200,
         **_,
@@ -918,7 +965,6 @@ class GatingTask(Task, Component):
 
         for i, ((xaxis, yaxis), gates) in enumerate(gates_per_axis_pair.items()):
             ax = flat_axes[i]
-            print(f"Plotting {xaxis} vs {yaxis}")
             X = df[[xaxis, yaxis]].values
             xlims = np.min(X[:, 0]), np.max(X[:, 0])
             ylims = np.min(X[:, 1]), np.max(X[:, 1])
@@ -976,7 +1022,9 @@ class GatingTask(Task, Component):
 
         after_all_gates = self.apply_all_gates(df)
         percent = (len(after_all_gates) / len(df)) * 100
-        stat_text = f"Total events kept after gating:\n{len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
+        stat_text = (
+            f"Total events kept after gating:\n{len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
+        )
         fig.suptitle(stat_text)
         # fig.tight_layout()
 
