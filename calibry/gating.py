@@ -31,6 +31,8 @@ from copy import deepcopy
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 AVAILABLE_AXIS = {'N/A'}
+PLOT_WIN_WIDTH = 1100
+PLOT_WIN_HEIGHT = 850
 
 
 # -- UI ELEMENTS
@@ -312,20 +314,19 @@ class PolygonDrawer:
 def get_resampled(df, resample_to):
     total_points = len(df)
     resample_to = int(min(total_points, resample_to))
-    resampled_df = df[:resample_to]
-    return resampled_df
+    return df[:resample_to]
 
 
-DEFAULT_RESAMPLE_TO = 50000
+DEFAULT_RESAMPLE_TO = 20000
 AX_MIN = -10000
 
 
 class DataframeSerie(Component):
-    # dataframe: pd.DataFrame
     datafile: 'DataFile'
     name: str
     resample_to: int = DEFAULT_RESAMPLE_TO
     color: List[int] = Field(default_factory=random_color)
+    marker_size: int = 2
     alpha: float = 0.1
     unique_id: Optional[str] = Field(default_factory=unique_tag)
 
@@ -344,12 +345,16 @@ class DataframeSerie(Component):
         self.color[3] = int(self.alpha * 255)
         with dpg.theme() as theme:
             with dpg.theme_component(dpg.mvScatterSeries):
+
+                # dpg.add_theme_style(
+                # dpg.mvPlotStyleVar_Marker,
+                # dpg.mvPlotMarker_Cross,
+                # category=dpg.mvThemeCat_Plots,
+                # )
+
                 dpg.add_theme_style(
-                    dpg.mvPlotStyleVar_Marker,
-                    dpg.mvPlotMarker_Cross,
-                    category=dpg.mvThemeCat_Plots,
+                    dpg.mvPlotStyleVar_MarkerSize, self.marker_size, category=dpg.mvThemeCat_Plots
                 )
-                dpg.add_theme_style(dpg.mvPlotStyleVar_MarkerSize, 3, category=dpg.mvThemeCat_Plots)
                 dpg.add_theme_color(
                     dpg.mvPlotCol_MarkerFill, self.color, category=dpg.mvThemeCat_Plots
                 )
@@ -368,14 +373,24 @@ class DataframeSerie(Component):
     def resample(self, sender, app_data, user_data):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         self.datafile.resample_to(int(app_data))
-        self._parentplot.update_series()
+        self.set_series_value(self._parentplot.transform.fwd)
 
     def set_series_value(self, fwd_transform):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
-        assert self._series is not None, "You need to call add() first"
         xaxis, yaxis = self._parentplot.xaxis, self._parentplot.yaxis
         data = fwd_transform(self.datafile._resampled_df[[xaxis, yaxis]].values).T.tolist()
-        dpg.set_value(self._series, data)
+
+        if self._series and dpg.does_item_exist(self._series):
+            dpg.set_value(self._series, data)
+        else:
+            self._series = dpg.add_scatter_series(
+                data[0],
+                data[1],
+                label=self.name,
+                parent=self._parentplot._y_axis,
+                before='__plot_data_layer',
+            )
+            self.setup_theme()
 
     def update_color(self, sender, app_data, user_data):
         self.color = [int(c * 255) for c in app_data]
@@ -385,11 +400,15 @@ class DataframeSerie(Component):
         self.alpha = app_data
         self.setup_theme()
 
+    def update_marker_size(self, sender, app_data, user_data):
+        assert self._series is not None, "No _series, You need to call add() first"
+        self.marker_size = app_data
+        self.setup_theme()
+
     def add(self, parent, **kwargs):
         assert self._parentplot is not None, "need a parent plot"
-        self._series = dpg.add_scatter_series(
-            [], [], label=self.name, parent=self._parentplot._y_axis, before='__plot_data_layer'
-        )
+
+        self.set_series_value(self._parentplot.transform.fwd)
 
         with dpg.group(parent=self._series):
             dpg.add_color_edit(
@@ -403,10 +422,11 @@ class DataframeSerie(Component):
                 min_value=0,
                 max_value=len(self.datafile.df),
                 width=100,
+                speed=DEFAULT_RESAMPLE_TO // 100,
                 callback=self.resample,
                 default_value=self.resample_to,
             )
-            alphaslider = dpg.add_slider_float(
+            dpg.add_slider_float(
                 label="Alpha",
                 min_value=0,
                 max_value=1,
@@ -414,7 +434,6 @@ class DataframeSerie(Component):
                 callback=self.update_alpha,
             )
 
-        self.setup_theme()
         self.datafile.resample_to(self.resample_to)
         self._parentplot.update_series()
 
@@ -516,6 +535,13 @@ class DistributionPlot(Component):
             self.transform = LinearTransform()
         self.update_series()
 
+    def set_max_points(self, sender, app_data, user_data):
+        max_points = app_data
+        per_serie = max_points // len(self.series)
+        for serie in self.series:
+            if len(serie.datafile._resampled_df) > per_serie:
+                serie.resample(sender, per_serie, user_data)
+
     def resample_all(self, sender, app_data, user_data):
         for serie in self.series:
             serie.resample(sender, app_data, user_data)
@@ -523,6 +549,10 @@ class DistributionPlot(Component):
     def update_alpha(self, sender, app_data, user_data):
         for serie in self.series:
             serie.update_alpha(sender, app_data, user_data)
+
+    def update_marker_size(self, sender, app_data, user_data):
+        for serie in self.series:
+            serie.update_marker_size(sender, app_data, user_data)
 
     def add(self, parent, **_):
         with dpg.group(parent=parent, horizontal=True):
@@ -534,22 +564,47 @@ class DistributionPlot(Component):
             )
 
             # add a global resampling slider:
-            self._resample_slider = dpg.add_drag_int(
-                label="Max points per file",
+            dpg.add_drag_int(
+                label="Max total points displayed",
+                min_value=0,
+                max_value=1000000,
+                default_value=DEFAULT_RESAMPLE_TO * 2,
+                width=100,
+                speed=DEFAULT_RESAMPLE_TO // 50,
+                callback=self.set_max_points,
+            )
+
+            # add a global resample slider:
+            dpg.add_drag_int(
+                label="Resample all to",
                 min_value=0,
                 max_value=500000,
                 default_value=DEFAULT_RESAMPLE_TO,
+                speed=DEFAULT_RESAMPLE_TO // 100,
                 width=100,
                 callback=self.resample_all,
             )
+
             # add a global alpha slider:
             self._alpha_slider = dpg.add_drag_float(
                 label="Alpha",
                 min_value=0,
                 max_value=1,
+                speed=0.005,
                 default_value=0.1,
                 width=50,
                 callback=self.update_alpha,
+            )
+
+            # marker size:
+            dpg.add_drag_float(
+                label="Marker Size",
+                min_value=0.1,
+                max_value=10,
+                speed=0.01,
+                default_value=1,
+                width=50,
+                callback=self.update_marker_size,
             )
 
         self._plot = dpg.add_plot(
@@ -563,7 +618,7 @@ class DistributionPlot(Component):
             # fit_button=True,
             parent=parent,
         )
-        self._legend = dpg.add_plot_legend(parent=self._plot)
+        self._legend = dpg.add_plot_legend(parent=self._plot, outside=True)
 
         self._x_axis = dpg.add_plot_axis(
             dpg.mvXAxis, label=self.xaxis, no_gridlines=True, parent=self._plot
@@ -612,7 +667,7 @@ class DataFile(Component):
     df: pd.DataFrame = Field(default_factory=pd.DataFrame)
 
     def model_post_init(self, *args):
-        super().model_post_init(*args)
+        super().model_post_init(*args)  # {{{}}}
         self.load()
 
     def load(self):
@@ -649,6 +704,9 @@ class DataFile(Component):
     def _toggle_use(self, sender, app_data, user_data):
         self.use = app_data
 
+    def __eq__(self, other):
+        return self.path == other.path if isinstance(other, DataFile) else False
+
 
 def add_new_file(list_manager, *args, **kwargs):
     files = xdialog.open_file("Title Here", filetypes=[], multiple=True)
@@ -668,6 +726,7 @@ class GatingFiles(Component):
             on_add_callback=lambda self, f: self._new_file_added(f),
             on_delete_callback=lambda self, f, _: self._file_deleted(f),
             button_label='Load File(s)',
+            allow_duplicates=False,
         ),
     ] = []
 
@@ -697,6 +756,7 @@ def points_in_polygon(polygon, pts):
     crossings = np.sum(horizontal_cross & ((slope < 0) != (edge2[:, 1] < edge1[:, 1])), axis=1)
     return on_edge | (crossings % 2 == 1)
 
+
 class PolygonGate(Component):
     vertices: List[List[float]] = []
     name: Annotated[str, make_ui_field(TextUI, width=150)] = ''
@@ -723,7 +783,7 @@ class PolygonGate(Component):
 
     def delete_datafile(self, datafile):
         for serie in self._plot.series:
-            if serie.dataframe is datafile.df:
+            if serie.datafile == datafile:
                 self._plot.remove_series(None, None, serie.unique_id)
 
     def delete_all_datafiles(self):
@@ -759,7 +819,9 @@ class PolygonGate(Component):
 
     def add_window(self):
         # create a window for the plot + controls
-        self._mainwin = dpg.add_window(label=self.name, width=700, height=700, pos=(100, 100))
+        self._mainwin = dpg.add_window(
+            label=self.name, width=PLOT_WIN_WIDTH, height=PLOT_WIN_HEIGHT, pos=(100, 100)
+        )
         self._plot.add(parent=self._mainwin)
         self._drawer.add(
             parent_tag=self._mainwin, plot_tag=self._plot._plot, y_axis=self._plot._y_axis

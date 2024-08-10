@@ -380,6 +380,7 @@ class ListManager(UIElement):
         add_button_callback: Optional[Callable] = None,
         on_delete_callback: Optional[Callable] = None,
         on_add_callback: Optional[Callable] = None,
+        allow_duplicates: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -388,6 +389,7 @@ class ListManager(UIElement):
         self.add_button_label = add_button_label
         self.on_delete_callback = on_delete_callback
         self.on_add_callback = on_add_callback
+        self.allow_duplicates = allow_duplicates
         self._tag = unique_tag()
         self._ui_items: List = []
         self._item_tag_to_group = {}
@@ -422,6 +424,11 @@ class ListManager(UIElement):
     def append(self, item):
         assert self.getter is not None, 'Getter not bound'
         this_list = self.getter()
+        if not self.allow_duplicates:
+            if item in this_list:
+                return
+
+
         index = len(this_list)
         this_list.append(item)
 
