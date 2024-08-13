@@ -138,10 +138,12 @@ class Component(BaseModel):
         super().__setattr__(name, value)
         self._on_change(name, old_value)
 
-    def register_on_change_callback(self, attr_name, callback):
+    def register_on_change_callback(self, attr_name, callback, call_right_away=True):
         if attr_name not in self._on_change_callbacks:
             self._on_change_callbacks[attr_name] = []
         self._on_change_callbacks[attr_name].append(callback)
+        if call_right_away:
+            callback(self, attr_name)
 
     def _on_change(self, attr_name, old_value):
         if attr_name in self._on_change_callbacks:

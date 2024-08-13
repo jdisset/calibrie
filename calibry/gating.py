@@ -158,9 +158,8 @@ class PolygonDrawer:
             )
         dpg.bind_item_handler_registry(self.plot, registry)
 
-        self.line_series_tag = dpg.add_line_series(
-            [], [], parent=self.y_axis, before='__plot_ui_layer'
-        )
+        ui_layer_tag = f'__plot_ui_layer_{self.plot}'
+        self.line_series_tag = dpg.add_line_series([], [], parent=self.y_axis, before=ui_layer_tag)
 
         self.setup_themes()
         self.apply_button_theme()
@@ -279,6 +278,7 @@ class PolygonDrawer:
                 self.add_point(dx, dy, screen_space=False, closest=False)
 
     def get_point_coords(self, loop=False, in_data_space=False):
+        print(f"Getting point coords. transform: {self.transform}")
         coords = np.array(self.data_space_vertices.copy())
         if loop and len(coords) > 0:
             coords = np.vstack([coords, coords[0]])
@@ -305,6 +305,7 @@ class PolygonDrawer:
             dpg.bind_item_theme(self.line_series_tag, self.line_series_theme)
 
         if self.on_update:
+            print("Calling on_update")
             self.on_update(self)
 
 
@@ -318,7 +319,7 @@ def get_resampled(df, resample_to):
     return df[:resample_to]
 
 
-DEFAULT_RESAMPLE_TO = 20000
+DEFAULT_RESAMPLE_TO = 50000
 AX_MIN = -10000
 
 
@@ -383,14 +384,15 @@ class DataframeSerie(Component):
         if self._series and dpg.does_item_exist(self._series):
             dpg.set_value(self._series, data)
         else:
+            data_layer_tag = f'__plot_data_layer_{self._parentplot._tag}'
             self._series = dpg.add_scatter_series(
                 data[0],
                 data[1],
                 label=self.name,
                 parent=self._parentplot._y_axis,
-                before='__plot_data_layer',
+                before=data_layer_tag,
             )
-            self.setup_theme()
+        self.setup_theme()
 
     def update_color(self, sender, app_data, user_data):
         self.color = [int(c * 255) for c in app_data]
@@ -408,7 +410,11 @@ class DataframeSerie(Component):
     def add(self, parent, **kwargs):
         assert self._parentplot is not None, "need a parent plot"
 
+        self.datafile.resample_to(self.resample_to)
+
         self.set_series_value(self._parentplot.transform.fwd)
+
+        assert self._series is not None
 
         with dpg.group(parent=self._series):
             dpg.add_color_edit(
@@ -434,7 +440,6 @@ class DataframeSerie(Component):
                 callback=self.update_alpha,
             )
 
-        self.datafile.resample_to(self.resample_to)
         self._parentplot.update_series()
 
 
@@ -521,6 +526,7 @@ class DistributionPlot(Component):
         self.series = []
 
     def add_series(self, serie):
+        print(f"Adding serie {serie.name} to plot {self._tag}")
         self.series.append(serie)
         serie._parentplot = self
         serie.add(parent=self._plot)
@@ -568,7 +574,7 @@ class DistributionPlot(Component):
                 label="Max total points displayed",
                 min_value=0,
                 max_value=1000000,
-                default_value=DEFAULT_RESAMPLE_TO * 2,
+                default_value=DEFAULT_RESAMPLE_TO * 4,
                 width=100,
                 speed=DEFAULT_RESAMPLE_TO // 50,
                 callback=self.set_max_points,
@@ -627,12 +633,16 @@ class DistributionPlot(Component):
             dpg.mvYAxis, label=self.yaxis, no_gridlines=True, parent=self._plot
         )
 
-        dpg.add_line_series([], [], parent=self._y_axis, tag='__plot_data_layer')
+        data_layer_tag = f'__plot_data_layer_{self._tag}'
+        if not dpg.does_item_exist(data_layer_tag):
+            dpg.add_line_series([], [], parent=self._y_axis, tag=data_layer_tag)
 
         for serie in self.series:
             serie.add(parent=self._plot)
 
-        dpg.add_line_series([], [], parent=self._y_axis, tag='__plot_ui_layer')
+        ui_layer_tag = f'__plot_ui_layer_{self._tag}'
+        if not dpg.does_item_exist(ui_layer_tag):
+            dpg.add_line_series([], [], parent=self._y_axis, tag=ui_layer_tag)
 
         # don't show grid lines:
         with dpg.theme() as theme:
@@ -791,12 +801,20 @@ class PolygonGate(Component):
             self._plot.remove_series(None, None, serie.unique_id)
 
     def __call__(self, df):
+
+        print(f"Applying gate {self.name} to {len(df)} points")
+
+        print(f"Vertices: {self.vertices}")
+
         if len(self.vertices) < 3:
             return df
 
         mask = points_in_polygon(
             np.asarray(self.vertices), df[[self.xchannel, self.ychannel]].values
         )
+        nvalid = np.sum(mask)
+        print(f"Found {nvalid} points inside the gate")
+
         return df[mask]
 
     def attr_changed(self, attr_name, old_value=None):
@@ -804,6 +822,7 @@ class PolygonGate(Component):
         self.update_plot()
 
     def update_plot(self, *args, **kwargs):
+        print(f"Updating plot for gate {self.name}")
         self._plot.xaxis = self.xchannel
         self._plot.yaxis = self.ychannel
         dpg.set_item_label(self._plot._x_axis, self.xchannel)
@@ -818,32 +837,30 @@ class PolygonGate(Component):
             dpg.set_item_label(self._mainwin, self.name)
 
     def add_window(self):
-        # create a window for the plot + controls
-        self._mainwin = dpg.add_window(
+        self._mainwin = dpg.add_window(  # add the main window
             label=self.name, width=PLOT_WIN_WIDTH, height=PLOT_WIN_HEIGHT, pos=(100, 100)
         )
-        self._plot.add(parent=self._mainwin)
-        self._drawer.add(
+        self._plot.add(parent=self._mainwin)  # add the plot
+        self._drawer.add(  # add the polygon drawer
             parent_tag=self._mainwin, plot_tag=self._plot._plot, y_axis=self._plot._y_axis
         )
 
     def _transform_changed(self, *args, **kwargs):
+        print("transform changed")
         if self._plot is not None and self._drawer is not None:
             self._drawer.transform = self._plot.transform
             self._drawer.transform_changed()
 
     def add(self, parent, **kwargs):
-        self._drawer: PolygonDrawer = PolygonDrawer()
-        self._plot: DistributionPlot = DistributionPlot()
-        self._plot.register_on_change_callback('transform', self._transform_changed)
-
+        self._plot: DistributionPlot = DistributionPlot()  # create the plot
         self._plot.transform = SymlogTransform()
+        self._drawer: PolygonDrawer = PolygonDrawer()  # create the drawer
+        self._plot.register_on_change_callback('transform', self._transform_changed)
 
         self.add_window()
 
         self._drawer.adding_enabled = True
-        if len(self.vertices) > 0:
-            # we populate the drawer with the vertices
+        if len(self.vertices) > 0:  # we populate the drawer with the vertices
             self._drawer.screen_space_vertices.clear()
             for x, y in self.vertices:
                 self._drawer.add_point(x, y, screen_space=False)
@@ -860,6 +877,7 @@ class PolygonGate(Component):
             callback=lambda s, a, u: setattr(self, '_apply', a),
         )
         self.update_plot()
+
         return tag
 
     def focus(self):
@@ -962,16 +980,14 @@ class GatingTask(Task, Component):
     def _gate_apply_changed(self, gate, old_value=None):
         print(f"gate {gate.name} apply changed from {old_value} to {gate._apply}")
         if hasattr(self, '_gating_files'):
+            print(f"applying all {len(self.gates)} gates to {len(self._gating_files.files)} files")
             # apply all gates
-            for gate in self.gates:
-                for file in self._gating_files.files:
+            for file in self._gating_files.files:
+                file._shuffled_df = file.df.sample(frac=1)
+                for gate in self.gates:
                     if gate._apply:
-                        t0 = time.time()
-                        file._shuffled_df = gate(file.df)
-                        print(f"gate {gate.name} applied in {time.time() - t0:.2f}s")
-                    else:
-                        file._shuffled_df = file.df.sample(frac=1)
-                    file.resample_to(len(file._resampled_df))
+                        file._shuffled_df = gate(file._shuffled_df)
+                file.resample_to(DEFAULT_RESAMPLE_TO)
 
             for gate in self.gates:
                 gate.update_plot()
@@ -1067,7 +1083,7 @@ class GatingTask(Task, Component):
                     after_applying = gate(df)
                     percent = (len(after_applying) / len(df)) * 100
                     stat_text = f"{gate.name}: {len(after_applying)}/{len(df)} ({percent:.1f}\%)"
-                    ax.plot(x, y, color=gcol, lw=3, label=stat_text)
+                    ax.plot(x, y, color=gcol, lw=1.5, label=stat_text)
                     ax.fill(x, y, color=gcol, alpha=0.2)
 
             ax.axvline(0, c='k', lw=0.5, alpha=0.5, linestyle='--')
@@ -1084,9 +1100,10 @@ class GatingTask(Task, Component):
             f"Total events kept after gating:\n{len(after_all_gates)}/{len(df)} ({percent:.1f}\%)"
         )
         fig.suptitle(stat_text)
-        # fig.tight_layout()
+        fig.tight_layout(pad=2)
 
         return fig
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
+
