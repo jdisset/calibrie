@@ -35,6 +35,97 @@ AVAILABLE_AXIS = {'N/A'}
 PLOT_WIN_WIDTH = 1100
 PLOT_WIN_HEIGHT = 850
 
+## {{{                        --     Transforms     --
+
+
+class Transform:
+    def fwd_x(self, x) -> NDArray: ...
+
+    def fwd_y(self, x) -> NDArray: ...
+
+    def inv_x(self, y) -> NDArray: ...
+
+    def inv_y(self, y) -> NDArray: ...
+
+
+class LinearTransform(Transform):
+    def fwd_x(self, x):
+        return x
+
+    def fwd_y(self, x):
+        return x
+
+    def inv_x(self, y):
+        return y
+
+    def inv_y(self, y):
+        return y
+
+
+class SymlogTransform(Transform):
+    def __init__(self, threshold=200, compression=0.4):
+        self.threshold = threshold
+        self.compression = compression
+
+    def fwd_x(self, x):
+        # original data space -> transformed "screen" space
+        return spline_biexponential(x, threshold=self.threshold, compression=self.compression)
+
+    def fwd_y(self, x):
+        return self.fwd_x(x)
+
+    def inv_x(self, y):
+        # transformed "screen" space -> original data space
+        return inverse_spline_biexponential(
+            y, threshold=self.threshold, compression=self.compression
+        )
+
+    def inv_y(self, y):
+        return self.inv_x(y)
+
+
+class SymlogXLinearYTransform(Transform):
+    def __init__(self, threshold=200, compression=0.4):
+        self.threshold = threshold
+        self.compression = compression
+
+    def fwd_x(self, x):
+        return spline_biexponential(x, threshold=self.threshold, compression=self.compression)
+
+    def fwd_y(self, x):
+        return x
+
+    def inv_x(self, y):
+        return inverse_spline_biexponential(
+            y, threshold=self.threshold, compression=self.compression
+        )
+
+    def inv_y(self, y):
+        return y
+
+
+class LinearXSymlogYTransform(Transform):
+    def __init__(self, threshold=200, compression=0.4):
+        self.threshold = threshold
+        self.compression = compression
+
+    def fwd_x(self, x):
+        return x
+
+    def fwd_y(self, x):
+        return spline_biexponential(x, threshold=self.threshold, compression=self.compression)
+
+    def inv_x(self, y):
+        return y
+
+    def inv_y(self, y):
+        return inverse_spline_biexponential(
+            y, threshold=self.threshold, compression=self.compression
+        )
+
+
+##────────────────────────────────────────────────────────────────────────────}}}
+
 
 # -- UI ELEMENTS
 ## {{{                        --     plot tools     --
@@ -82,12 +173,19 @@ def invtr(y):
 
 
 def make_dpg_symlog_ax(axis, lims, skip10=False, transform=tr):
-    p10, subticks = powers_of_ten(*lims, skip10=skip10)
-    major_ticks = tuple(zip([format_tick_label(p) for p in p10], transform(p10)))
-    # a trick to get the major ticks to show up stronger since dpg doesn't support minor ticks:
-    major_ticks_again = tuple(zip(['' for p in p10], transform(p10)))
-    minor_ticks = tuple(zip(['' for p in subticks], transform(subticks)))
-    dpg.set_axis_ticks(axis, minor_ticks + major_ticks + major_ticks_again * 2)
+    # test if it's a log like:
+    t1000_t100 = np.abs(transform(1000) - transform(100))
+    t10000_t1000 = np.abs(transform(10000) - transform(1000))
+    if t1000_t100 / np.maximum(1e-6, t10000_t1000) > 0.9:
+        # it's a log-like transform
+        p10, subticks = powers_of_ten(*lims, skip10=skip10)
+        major_ticks = tuple(zip([format_tick_label(p) for p in p10], transform(p10)))
+        # a trick to get the major ticks to show up stronger since dpg doesn't support minor ticks:
+        major_ticks_again = tuple(zip(['' for p in p10], transform(p10)))
+        minor_ticks = tuple(zip(['' for p in subticks], transform(subticks)))
+        dpg.set_axis_ticks(axis, minor_ticks + major_ticks + major_ticks_again * 2)
+    else:
+        dpg.reset_axis_ticks(axis)
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
@@ -229,7 +327,8 @@ class PolygonDrawer:
         assert self.plot is not None, "No plot, you need to call add() first"
 
         if not screen_space:
-            x, y = self.transform.fwd(np.array([x, y]))
+            x = self.transform.fwd_x(x)
+            y = self.transform.fwd_y(y)
 
         p = dpg.add_drag_point(
             default_value=(x, y),
@@ -278,20 +377,23 @@ class PolygonDrawer:
                 self.add_point(dx, dy, screen_space=False, closest=False)
 
     def get_point_coords(self, loop=False, in_data_space=False):
-        print(f"Getting point coords. transform: {self.transform}")
         coords = np.array(self.data_space_vertices.copy())
         if loop and len(coords) > 0:
             coords = np.vstack([coords, coords[0]])
 
         if not in_data_space:
-            coords = self.transform.fwd(coords)
+            coords = np.array([self.transform.fwd_x(coords[:, 0]), self.transform.fwd_y(coords[:, 1])]).T
         return coords
 
     def update_polygon(self):
         # update the data space vertices, using screen_space as source of truth
-        self.data_space_vertices = [
-            self.transform.inv(np.array(dpg.get_value(p))[:2]) for p in self.screen_space_vertices
-        ]
+        ssv = np.array([dpg.get_value(p) for p in self.screen_space_vertices])
+        if len(ssv) == 0:
+            self.data_space_vertices = []
+        else:
+            self.data_space_vertices = np.array(
+                [self.transform.inv_x(ssv[:, 0]), self.transform.inv_y(ssv[:, 1])]
+            ).T.tolist()
 
         if len(self.screen_space_vertices) > 2:
             coords = self.get_point_coords(loop=True).T.tolist()
@@ -305,7 +407,6 @@ class PolygonDrawer:
             dpg.bind_item_theme(self.line_series_tag, self.line_series_theme)
 
         if self.on_update:
-            print("Calling on_update")
             self.on_update(self)
 
 
@@ -374,12 +475,13 @@ class DataframeSerie(Component):
     def resample(self, sender, app_data, user_data):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         self.datafile.resample_to(int(app_data))
-        self.set_series_value(self._parentplot.transform.fwd)
+        self.set_series_value(self._parentplot.transform)
 
-    def set_series_value(self, fwd_transform):
+    def set_series_value(self, transform: Transform):
         assert self._parentplot is not None, "No _parentplot, You need to call add() first"
         xaxis, yaxis = self._parentplot.xaxis, self._parentplot.yaxis
-        data = fwd_transform(self.datafile._resampled_df[[xaxis, yaxis]].values).T.tolist()
+        data = self.datafile._resampled_df[[xaxis, yaxis]].values
+        data = [transform.fwd_x(data[:, 0]).tolist(), transform.fwd_y(data[:, 1]).tolist()]
 
         if self._series and dpg.does_item_exist(self._series):
             dpg.set_value(self._series, data)
@@ -412,7 +514,7 @@ class DataframeSerie(Component):
 
         self.datafile.resample_to(self.resample_to)
 
-        self.set_series_value(self._parentplot.transform.fwd)
+        self.set_series_value(self._parentplot.transform)
 
         assert self._series is not None
 
@@ -447,36 +549,6 @@ class DataframeSerie(Component):
 ## {{{                         --     dplot     --
 
 
-class Transform:
-    def fwd(self, x) -> NDArray: ...
-
-    def inv(self, y) -> NDArray: ...
-
-
-class LinearTransform(Transform):
-    def fwd(self, x):
-        return x
-
-    def inv(self, y):
-        return y
-
-
-class SymlogTransform(Transform):
-    def __init__(self, threshold=200, compression=0.4):
-        self.threshold = threshold
-        self.compression = compression
-
-    def fwd(self, x):
-        # original data space -> transformed "screen" space
-        return spline_biexponential(x, threshold=self.threshold, compression=self.compression)
-
-    def inv(self, y):
-        # transformed "screen" space -> original data space
-        return inverse_spline_biexponential(
-            y, threshold=self.threshold, compression=self.compression
-        )
-
-
 class DistributionPlot(Component):
     xaxis: str = ''
     yaxis: str = ''
@@ -499,26 +571,22 @@ class DistributionPlot(Component):
     def update_series(self):
         if len(self.series) > 0:
             for serie in self.series:
-                serie.set_series_value(self.transform.fwd)
+                serie.set_series_value(self.transform)
 
-            if not isinstance(self.transform, LinearTransform):
-                xmin = min([df.get_min(self.xaxis) for df in self.series])
-                xmax = max([df.get_max(self.xaxis) for df in self.series])
-                ymin = min([df.get_min(self.yaxis) for df in self.series])
-                ymax = max([df.get_max(self.yaxis) for df in self.series])
-                make_dpg_symlog_ax(
-                    self._x_axis,
-                    (min(xmin, AX_MIN), max(xmax * 10, xmax)),
-                    transform=self.transform.fwd,
-                )
-                make_dpg_symlog_ax(
-                    self._y_axis,
-                    (min(ymin, AX_MIN), max(ymax * 10, ymax)),
-                    transform=self.transform.fwd,
-                )
-            else:
-                dpg.reset_axis_ticks(self._x_axis)
-                dpg.reset_axis_ticks(self._y_axis)
+            xmin = min([df.get_min(self.xaxis) for df in self.series])
+            xmax = max([df.get_max(self.xaxis) for df in self.series])
+            ymin = min([df.get_min(self.yaxis) for df in self.series])
+            ymax = max([df.get_max(self.yaxis) for df in self.series])
+            make_dpg_symlog_ax(
+                self._x_axis,
+                (min(xmin, AX_MIN), max(xmax * 10, xmax)),
+                transform=self.transform.fwd_x,
+            )
+            make_dpg_symlog_ax(
+                self._y_axis,
+                (min(ymin, AX_MIN), max(ymax * 10, ymax)),
+                transform=self.transform.fwd_y,
+            )
 
     def remove_all_series(self):
         for serie in self.series:
@@ -526,7 +594,6 @@ class DistributionPlot(Component):
         self.series = []
 
     def add_series(self, serie):
-        print(f"Adding serie {serie.name} to plot {self._tag}")
         self.series.append(serie)
         serie._parentplot = self
         serie.add(parent=self._plot)
@@ -537,9 +604,19 @@ class DistributionPlot(Component):
     def _transform_changed(self, sender, app_data, user_data):
         if app_data == "Symlog":
             self.transform = SymlogTransform()
-        else:
+        elif app_data == "Linear":
             self.transform = LinearTransform()
+        elif app_data == "Symlog X, Linear Y":
+            self.transform = SymlogXLinearYTransform()
+        elif app_data == "Linear X, Symlog Y":
+            self.transform = LinearXSymlogYTransform()
+        else:
+            raise ValueError(f"Unknown transform {app_data}")
+
         self.update_series()
+        # auto center:
+        dpg.fit_axis_data(self._x_axis)
+        dpg.fit_axis_data(self._y_axis)
 
     def set_max_points(self, sender, app_data, user_data):
         max_points = app_data
@@ -563,10 +640,10 @@ class DistributionPlot(Component):
     def add(self, parent, **_):
         with dpg.group(parent=parent, horizontal=True):
             self._transform_dropdown = dpg.add_combo(
-                items=["Symlog", "Linear"],
+                items=["Symlog", "Linear", "Symlog X, Linear Y", "Linear X, Symlog Y"],
                 default_value="Symlog",
                 callback=self._transform_changed,
-                width=80,
+                width=120,
             )
 
             # add a global resampling slider:
@@ -802,10 +879,6 @@ class PolygonGate(Component):
 
     def __call__(self, df):
 
-        print(f"Applying gate {self.name} to {len(df)} points")
-
-        print(f"Vertices: {self.vertices}")
-
         if len(self.vertices) < 3:
             return df
 
@@ -813,16 +886,13 @@ class PolygonGate(Component):
             np.asarray(self.vertices), df[[self.xchannel, self.ychannel]].values
         )
         nvalid = np.sum(mask)
-        print(f"Found {nvalid} points inside the gate")
 
         return df[mask]
 
     def attr_changed(self, attr_name, old_value=None):
-        print(f'attr {attr_name} changed from {old_value} to {getattr(self, attr_name)}')
         self.update_plot()
 
     def update_plot(self, *args, **kwargs):
-        print(f"Updating plot for gate {self.name}")
         self._plot.xaxis = self.xchannel
         self._plot.yaxis = self.ychannel
         dpg.set_item_label(self._plot._x_axis, self.xchannel)
@@ -846,7 +916,6 @@ class PolygonGate(Component):
         )
 
     def _transform_changed(self, *args, **kwargs):
-        print("transform changed")
         if self._plot is not None and self._drawer is not None:
             self._drawer.transform = self._plot.transform
             self._drawer.transform_changed()
@@ -917,7 +986,6 @@ def density_histogram2d(
         max_range = np.max(np.abs(np.diff(ranges, axis=1)))
         nbins = np.round(nbins * np.abs(np.diff(ranges, axis=1)) / max_range)
         nbins = tuple(nbins.flatten().astype(int))
-        print(f"nbins: {nbins}")
 
         # nbins = (nbins, nbins)
 
@@ -978,7 +1046,6 @@ class GatingTask(Task, Component):
                 gate.add_datafile(file)
 
     def _gate_apply_changed(self, gate, old_value=None):
-        print(f"gate {gate.name} apply changed from {old_value} to {gate._apply}")
         if hasattr(self, '_gating_files'):
             print(f"applying all {len(self.gates)} gates to {len(self._gating_files.files)} files")
             # apply all gates
@@ -1106,4 +1173,3 @@ class GatingTask(Task, Component):
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
-
