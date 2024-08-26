@@ -1,4 +1,5 @@
 from jaxopt import GaussNewton
+import matplotlib.patches as patches
 from calibry.utils import Escaped
 from .pipeline import Task, DiagnosticFigure
 import jax
@@ -22,8 +23,8 @@ from ott.solvers.linear.sinkhorn import Sinkhorn
 
 from .utils import Context, LoadedData
 
-from dracon.utils import  DictLike
-from dracon.loader import  LoadedConfig
+from dracon.utils import DictLike
+from dracon.loader import LoadedConfig
 
 from pydantic import Field
 
@@ -51,9 +52,7 @@ class MEFBeadsCalibration(Task):
     model_resolution: int = 7
     model_degree: int = 2
 
-
     def model_post_init(self, *args, **kwargs):
-
         super().model_post_init(*args, **kwargs)
 
         self._tr = partial(
@@ -182,18 +181,11 @@ class MEFBeadsCalibration(Task):
         f.suptitle(f'Unmixing after calibration to {self._calibration_units_name}', y=1.05)
 
         peakfig = self.plot_bead_peaks_diagnostics()
-        regfig = self.plot_regressions()
 
-        classname = self.__class__.__name__
-        return Context().update(
-            {
-                f'diagnostics_{classname}': {
-                    'mefcontrols': f,
-                    'peak_id': peakfig,
-                    'channel_regression': regfig,
-                }
-            }
-        )
+        return [
+            DiagnosticFigure(fig=f, name='Unmixing after mef calibration'),
+            DiagnosticFigure(fig=peakfig, name='Bead peaks'),
+        ]
 
     def process(self, ctx: Context):
         self._log.debug(f'Calibrating values to {self._calibration_units_name}')
@@ -337,41 +329,95 @@ class MEFBeadsCalibration(Task):
                 )
             )
 
-    def plot_regressions(self):
-        NBEADS, NCHAN = self._mef_tr.shape
-        fig, axes = plt.subplots(1, NCHAN, figsize=(5 * NCHAN, 5))
-        for c in range(NCHAN):
-            ax = axes[c]
-            w = self._peak_weights[:, c]
-            ax.scatter(
-                self._bead_peak_locations[:, c],
-                self._mef_tr[:, c],
-                c=np.clip(w, 0, 1),
-                cmap='RdYlGn',
-            )
-            x = np.linspace(
-                self._saturation_thresholds_tr[c, 0], self._saturation_thresholds_tr[c, 1], 300
-            )
-            y = utils.evaluate_stacked_poly(x, self._params[c])
-            ax.plot(x, y, color='k', ls='--', alpha=0.75)
-            ax.set_title(self.use_channels[c])
-            ax.set_xlabel('AU')
-            ax.set_ylabel('MEF')
-        return fig
-
     def plot_bead_peaks_diagnostics(self):
         """
-        Plot diagnostics for the bead peaks computation:
-        - An assignment chart showing the proportion of observations assigned to each bead
-        - 1 plot per channel showing both bead assignment, peak detection and final standardized densities
+        Plot diagnostics for the bead peaks computation using subplots instead of subfigures,
+        with correct scaling for multiple axes.
         """
         svmat = np.array(self._vmat)
         nbeads = self._bead_peak_locations.shape[0]
+        NCHAN = len(self.use_channels)
 
-        mainfig = plt.figure(constrained_layout=True, figsize=(15, 15))
-        subfigs = mainfig.subfigures(1, 3, wspace=0, width_ratios=[0.4, 10, 2])
+        fig = plt.figure(figsize=(18, 25))
+        gs = fig.add_gridspec(
+            ncols=NCHAN + 1,
+            nrows=NCHAN + 4,
+            width_ratios=[0.2] + [1] * NCHAN,
+            height_ratios=[1] * NCHAN + [0.1, 1.2, 0.1, 2],
+            hspace=0.4,
+            wspace=0.3,
+        )
+
+        # Assignment plot
+        ax_assignment = fig.add_subplot(gs[:, 0])
+        self.plot_assignment(ax_assignment)
+
+        axes_densities = []
+        for i in range(NCHAN):
+            if i == 0:
+                ax = fig.add_subplot(gs[i, 1 : NCHAN])
+            else:
+                ax = fig.add_subplot(gs[i, 1 : NCHAN], sharex=axes_densities[0])
+            axes_densities.append(ax)
+        self.plot_densities(axes_densities)
+
+        # Overlap plot
+        axes_overlap = [fig.add_subplot(gs[i, -1]) for i in range(NCHAN)]
+        self.plot_overlap(axes_overlap)
+
+        # Regressions plot
+        axes_regressions = [fig.add_subplot(gs[NCHAN+1, 1 + i]) for i in range(NCHAN)]
+        self.plot_regressions(axes_regressions)
+
+        # After correction plot
+        axes_after = [fig.add_subplot(gs[-1, 1 + i]) for i in range(NCHAN)]
+        self.plot_beads_after_correction(axes_after)
+
+        # Function to add framed title
+        def add_framed_title(axes, title, padding=0.0125):
+            # Get the positions of the first and last axes in the group
+            first_ax = axes[0]
+            last_ax = axes[-1]
+
+            # Calculate the bounding box for the group of axes
+            bbox = first_ax.get_position()
+            bbox.y0 = min(ax.get_position().y0 for ax in axes)
+            bbox.y1 = max(ax.get_position().y1 for ax in axes)
+            bbox.x1 = last_ax.get_position().x1
+
+            # Add padding
+            bbox.x0 -= padding
+            bbox.x1 += padding
+            bbox.y0 -= padding
+            bbox.y1 += padding
+
+            # Add the title
+            fig.text(
+                bbox.x0 + bbox.width / 2,
+                bbox.y1,
+                title,
+                ha='center',
+                va='bottom',
+                fontsize=12,
+                fontweight='bold',
+                transform=fig.transFigure,
+            )
+
+        fig.tight_layout()
+        # Add framed titles
+        add_framed_title([ax_assignment], "Assignment")
+        add_framed_title(
+            axes_densities, "Density and assignment of observations to bead number\n(hatched = out of range)"
+        )
+        add_framed_title(axes_overlap, "Bead overlap matrices")
+        add_framed_title(axes_regressions, "Mapping of Arbitrary Units to MEF")
+        add_framed_title(axes_after, "Observed peaks alignment to targets after correction")
+        # Adjust layout
+
+        return fig
+
+    def plot_assignment(self, ax):
         assignment = np.sort(np.argmax(self._vmat, axis=1))[:, None]
-        ax = subfigs[0].subplots(1, 1)
         cmap = plt.get_cmap('tab10')
         cmap.set_bad(color='white')
         centroids = [
@@ -400,25 +446,20 @@ class MEFBeadsCalibration(Task):
         ax.set_xticks([])
         ax.set_yticks([0, len(assignment)])
 
+    def plot_densities(self, axes):
         resolution = self._beads_densities.shape[2]
         x = np.linspace(self._peaks_min_x, self._peaks_max_x, resolution)
-        axes = subfigs[1].subplots(len(self.use_channels), 1, sharex=True)
-        if len(self.use_channels) == 1:
-            axes = [axes]
+        nbeads = self._bead_peak_locations.shape[0]
 
         weights = (x > self._saturation_thresholds_tr[:, 0][:, None]) & (
             x < self._saturation_thresholds_tr[:, 1][:, None]
         )
 
-        print(f'weights.shape: {weights.shape}')
-
         beadcolors = [plt.get_cmap('tab10')(1.0 * i / 10) for i in range(10)]
-        for c in range(len(self.use_channels)):
-            ax = axes[c]
+        for c, ax in enumerate(axes):
             for b in range(nbeads):
-
                 dens = self._beads_densities[b, c]
-                dens /= jnp.max(self._beads_densities[b, c])
+                dens /= np.max(self._beads_densities[b, c])
                 ax.plot(x, dens, label=f'bead {b}', linewidth=1.25, color=beadcolors[b])
 
                 # also plot the actual distribution
@@ -453,25 +494,22 @@ class MEFBeadsCalibration(Task):
                     ha='center',
                     va='center',
                 )
-                ax.set_ylim(0, 1.2)
-                ax.set_yticks([])
+            ax.set_ylim(0, 1.2)
+            ax.set_yticks([])
 
-                tr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
-                    ax,
-                    [self._itr(self._peaks_min_x), self._itr(self._peaks_max_x * 1.02)],
-                    None,
-                    linthresh=self.log_poly_threshold,
-                    linscale=self.log_poly_scale,
-                )
+            tr, invtr, xlims_tr, ylims_tr = plots.make_symlog_ax(
+                ax,
+                [self._itr(self._peaks_min_x), self._itr(self._peaks_max_x * 1.02)],
+                None,
+                linthresh=self.log_poly_threshold,
+                linscale=self.log_poly_scale,
+            )
 
-                title = f'{self.use_channels[c]}'
-                ax.set_ylabel(title)
+            title = f'{self.use_channels[c]}'
+            ax.set_ylabel(title)
 
-            axes[0].set_title('Density and assignment of observations (hatched = out of range)')
-        subfigs[1].suptitle("Bead peak diagnostics")
-
-        # plot overlap matrix:
-        axes = subfigs[2].subplots(self._overlap.shape[2], 1, sharex=True)
+    def plot_overlap(self, axes):
+        nbeads = self._bead_peak_locations.shape[0]
         for i, ax in enumerate(axes):
             im = ax.imshow(
                 self._overlap[:, :, i], cmap='Reds', extent=[0, nbeads, 0, nbeads], origin='lower'
@@ -480,15 +518,46 @@ class MEFBeadsCalibration(Task):
             ax.set_yticks(np.arange(nbeads) + 0.5)
             ax.set_xticklabels(np.arange(nbeads))
             ax.set_yticklabels(np.arange(nbeads))
-        axes[0].set_title("Bead overlap matrices")
 
-        return [DiagnosticFigure(fig=mainfig, name='Bead peaks')]
+    def plot_regressions(self, axes):
+        NBEADS, NCHAN = self._mef_tr.shape
+        for c, ax in enumerate(axes):
+            w = self._peak_weights[:, c]
+            ax.scatter(
+                self._bead_peak_locations[:, c],
+                self._mef_tr[:, c],
+                c=np.clip(w, 0, 1),
+                cmap='RdYlGn',
+            )
+            x = np.linspace(
+                self._saturation_thresholds_tr[c, 0], self._saturation_thresholds_tr[c, 1], 300
+            )
+            y = utils.evaluate_stacked_poly(x, self._params[c])
+            ax.plot(x, y, color='k', ls='--', alpha=0.75)
+            # add name of bead
+            for i in range(NBEADS):
+                ax.text(
+                    self._bead_peak_locations[i, c],
+                    self._mef_tr[i, c] + 0.1,
+                    f'{i}',
+                    fontsize=8,
+                    ha='center',
+                    va='bottom',
+                )
 
-    def plot_beads_after_correction(self):
+            xlims = self._itr(ax.get_xlim())
+            ylims = self._itr(ax.get_ylim())
+
+            plots.make_tr_ax(ax, tr=self._tr, invtr=self._itr, xlims=xlims, ylims=ylims)
+            # no units or ticks
+            ax.set_title(self.use_channels[c])
+            ax.set_xlabel('AU')
+            ax.set_ylabel('MEF')
+
+    def plot_beads_after_correction(self, axes):
         from matplotlib import cm
 
         NBEADS, NCHAN = self._mef_tr.shape
-        fig, axes = plt.subplots(1, NCHAN, figsize=(1.3 * NCHAN, 9))
         tdata = np.array(
             [utils.evaluate_stacked_poly(o, p) for o, p in zip(self._obs_tr.T, self._params)]
         ).T
@@ -499,18 +568,17 @@ class MEFBeadsCalibration(Task):
             ]
         ).T
 
-        for c in range(NCHAN):
-            ax = axes[c]
+        for c, ax in enumerate(axes):
             chan = self.use_channels[c]
-            ax.set_title(f'{chan} \n(to {self.channel_units[chan]})', pad=40)
             ym, yM = self._peaks_min_x * 0.8, self._peaks_max_x * 1.5
             ax.set_ylim(ym, yM)
             ax.set_yticks([])
             ax.set_xlim(-0.5, 0.5)
-            ax.axis('off')
+            # ax.axis('off')
             ax.spines['left'].set_visible(False)
             ax.spines['right'].set_visible(False)
             ax.spines['top'].set_visible(False)
+            ax.set_xlabel(f'{chan} \n(to {self.channel_units[chan]})')
 
             has_nans = np.mean(np.isnan(tdata[:, c])) > 0.5
             if has_nans:
@@ -528,10 +596,8 @@ class MEFBeadsCalibration(Task):
                         horizontalalignment='center',
                         verticalalignment='center',
                     )
-
             else:
                 peak_min, peak_max = np.min(tpeaks[:, c]) * 0.99, np.max(tpeaks[:, c]) * 1.01
-                print(f'Channel = {self.use_channels[c]}')
                 error = np.where(
                     (self._mef_tr[1:, c] >= peak_min) & (self._mef_tr[1:, c] <= peak_max),
                     np.abs(tpeaks[1:, c] - self._mef_tr[1:, c]),
@@ -607,6 +673,3 @@ class MEFBeadsCalibration(Task):
                     color=color,
                     horizontalalignment='center',
                 )
-
-        fig.tight_layout()
-        return fig

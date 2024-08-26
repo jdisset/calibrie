@@ -599,6 +599,10 @@ def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.5, skip10=True, m
 
     tr = partial(utils.spline_biexponential, threshold=linthresh, compression=linscale)
     invtr = partial(utils.inverse_spline_biexponential, threshold=linthresh, compression=linscale)
+    return make_tr_ax(ax, tr, invtr, xlims, ylims, skip10=skip10, margins=margins)
+
+
+def make_tr_ax(ax, tr, invtr, xlims=None, ylims=None, skip10=True, margins=0.05):
     xlims_tr = xlims
     ylims_tr = ylims
 
@@ -733,6 +737,7 @@ def unmixing_plot(
             tr, invtr, xlims_tr, ylims_tr = make_symlog_ax(
                 ax, xlims, ylims, linthresh=linthresh, linscale=linscale
             )
+
             Xtr = tr(X)
             density_histogram2d(
                 ax,
