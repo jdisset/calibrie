@@ -199,6 +199,7 @@ class LoadControls(Task):
         )
 
         return {
+            'raw_color_controls': self.color_controls,
             'controls_values': self._controls_values,
             'controls_masks': self._controls_masks,
             'protein_names': self._protein_names,

@@ -1092,11 +1092,12 @@ class GatingTask(Task, Component):
         **_,
     ) -> Any:
 
-        assert use_files, "No files selected"
+        if use_files is None:
+            print("Using all color controls for gating diagnostics")
+            all_data_df = pd.concat(ctx.raw_color_controls.values()).sample(frac=1)
+        else:
+            all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files]).sample(frac=1)
 
-        print(f"Processing {len(use_files)} files: {use_files}")
-
-        all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files]).sample(frac=1)
         df = get_resampled(all_data_df, resample_to)
 
         # create a plot for each gates groupd by the same x and y axis
