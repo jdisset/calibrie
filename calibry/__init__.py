@@ -1,5 +1,6 @@
 from .pipeline import *
 
+from .gating import GatingTask, PolygonGate
 from .linearcompensation import LinearCompensation
 from .nonlinearunmixing import hellonls, fit_reference_functions, NonLinearUnmixing
 from .loadcontrols import LoadControls

@@ -1,7 +1,7 @@
 from jaxopt import GaussNewton
-from .pipeline import Task
 import jax
 from .utils import Context
+from .pipeline import Task, DiagnosticFigure
 from jax import jit, vmap
 import jax.numpy as jnp
 import numpy as np
@@ -26,8 +26,8 @@ class ProteinMapping(Task):
         super().model_post_init(*args, **kwargs)
         self.reference_protein = self.reference_protein.upper()
         if self.logspace:
-            self._logt = utils.logtransform
-            self._invlogt = utils.inv_logtransform
+            self._logt = utils.logtransform_jax
+            self._invlogt = utils.inv_logtransform_jax
         else:
             self._logt = lambda x: x
             self._invlogt = lambda x: x
@@ -77,6 +77,9 @@ class ProteinMapping(Task):
         return Context(abundances_mapped=abundances_mapped)
 
     def diagnostics(self, ctx: Context, **kw):
+
+        # update with self.diagnostic_kwargs
+
         nbins = kw.pop('nbins', 300)
 
         fmap, _ = self.plot_mapping(ctx.protein_names, nbins=nbins, **kw)
@@ -97,14 +100,11 @@ class ProteinMapping(Task):
         f.suptitle(f'Unmixing after protein mapping to {self.reference_protein}')
 
         classname = self.__class__.__name__
-        return Context().update(
-            {
-                f'diagnostics_{classname}': {
-                    'mapping_regression': fmap,
-                    f'unmixing_to_{self.reference_protein}_AU': f,
-                }
-            }
-        )
+        return [
+            DiagnosticFigure(fmap, f'{classname}_mapping'),
+            DiagnosticFigure(f, f'{classname}_unmixing'),
+        ]
+
 
     def plot_mapping(
         self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None, **kw
@@ -117,6 +117,7 @@ class ProteinMapping(Task):
         refx = self._allprt_abundances[:, self._reference_protid]
         if target_bounds is None:
             target_bounds = np.quantile(refx, np.array([0.0001, 1]))
+        target_bounds = np.asarray(target_bounds)
         # log_target_bounds = self._logt(target_bounds) + np.array([-10, 10])
         j = 0
 
@@ -127,6 +128,7 @@ class ProteinMapping(Task):
             otherx = self._allprt_abundances[:, i]
             if other_bounds is None:
                 other_bounds = np.quantile(otherx, [0.001, 1])
+            other_bounds = np.asarray(other_bounds)
             log_other_bounds = self._logt(other_bounds) + np.array([-10, 10])
 
             if logspace:

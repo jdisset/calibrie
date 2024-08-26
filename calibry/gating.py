@@ -12,7 +12,7 @@ from pathlib import Path
 import xdialog
 import calibry
 import calibry.utils
-from calibry.pipeline import Task
+from calibry.pipeline import Task, DiagnosticFigure
 from calibry.utils import spline_biexponential, inverse_spline_biexponential
 from pydantic import BaseModel, Field, ConfigDict
 from numpy.typing import NDArray
@@ -382,7 +382,9 @@ class PolygonDrawer:
             coords = np.vstack([coords, coords[0]])
 
         if not in_data_space:
-            coords = np.array([self.transform.fwd_x(coords[:, 0]), self.transform.fwd_y(coords[:, 1])]).T
+            coords = np.array(
+                [self.transform.fwd_x(coords[:, 0]), self.transform.fwd_y(coords[:, 1])]
+            ).T
         return coords
 
     def update_polygon(self):
@@ -878,7 +880,6 @@ class PolygonGate(Component):
             self._plot.remove_series(None, None, serie.unique_id)
 
     def __call__(self, df):
-
         if len(self.vertices) < 3:
             return df
 
@@ -1027,6 +1028,8 @@ def density_histogram2d(
 
 
 ## {{{                        --     GatingTask     --
+
+
 class GatingTask(Task, Component):
     gates: Annotated[
         List[PolygonGate],
@@ -1080,7 +1083,7 @@ class GatingTask(Task, Component):
     def diagnostics(
         self,
         ctx: Any,
-        use_files: list,
+        use_files: Optional[list] = None,
         resample_to=100000,
         nbins=400,
         density_lims=(1e-6, None),
@@ -1088,7 +1091,10 @@ class GatingTask(Task, Component):
         dpi=200,
         **_,
     ) -> Any:
+
         assert use_files, "No files selected"
+
+        print(f"Processing {len(use_files)} files: {use_files}")
 
         all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files]).sample(frac=1)
         df = get_resampled(all_data_df, resample_to)
@@ -1169,7 +1175,7 @@ class GatingTask(Task, Component):
         fig.suptitle(stat_text)
         fig.tight_layout(pad=2)
 
-        return fig
+        return [DiagnosticFigure(fig, "Gating")]
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}

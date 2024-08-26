@@ -1,6 +1,6 @@
 from jaxopt import GaussNewton
 from calibry.utils import Escaped
-from .pipeline import Task
+from .pipeline import Task, DiagnosticFigure
 import jax
 from jax import jit, vmap
 import jax.numpy as jnp
@@ -482,7 +482,7 @@ class MEFBeadsCalibration(Task):
             ax.set_yticklabels(np.arange(nbeads))
         axes[0].set_title("Bead overlap matrices")
 
-        return mainfig
+        return [DiagnosticFigure(fig=mainfig, name='Bead peaks')]
 
     def plot_beads_after_correction(self):
         from matplotlib import cm

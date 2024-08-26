@@ -228,7 +228,8 @@ def generate_controls_dict(
 
 
 def escape_name(name):
-    return name.replace('-', '_').replace(' ', '_').upper().removesuffix('_A')
+    # return name.replace('-', '_').replace(' ', '_').upper().removesuffix('_A')
+    return name.replace('-', '_').replace(' ', '_').upper()
 
 
 def escape(x):
@@ -496,6 +497,7 @@ def cubic_exp_inv(y, threshold, base, scale: float):
     return E - (F / (D * C)) + (C / (cb2 * D))
 
 
+
 def spline_biexponential(x, threshold: float = 100, base: int = 10, compression: float = 0.5):
     """
     bi-logarithm function with smooth transition to cubic polynomial between [-threshold, threshold]
@@ -536,6 +538,95 @@ def inverse_spline_biexponential(
     )
     return y * sign
 
+
+
+
+
+def logb_jax(x, base=10, **kwargs):
+    """Compute log of x in base b."""
+    return jnp.log(x, **kwargs) / jnp.log(base)
+
+
+def cubic_exp_fwd_jax(x, threshold, base, scale=1):
+    """
+    cubic polynomial that goes through (0,0) and has same first
+    and second derivative as the log function at the threshold
+    it appears monotonically increasing for x in [0, threshold]
+    although I haven't technically proven it
+    """
+    # assert base > 1 and scale > 0, 'Base must be > 1 and scale > 0'
+    # assert (
+    # 6 * logb(threshold, base) * scale > 5
+    # ), 'Threshold too small for given scale (or vice versa)'
+
+    logthresh = jnp.log(threshold)
+    logbase = jnp.log(base)
+    a = -0.5 * (3 - 2 * scale * logthresh) / (threshold**3 * logbase)
+    b = -(-4 + 3 * scale * logthresh) / (threshold**2 * logbase)
+    c = -0.5 * (5 - 6 * scale * logthresh) / (threshold * logbase)
+    return a * x**3 + b * x**2 + c * x
+
+
+def cubic_exp_inv_jax(y, threshold, base, scale):
+    """
+    inverse of cubic_exp_fwd (on [0,T])
+    """
+    # used wolfram to solve the analytical inverse
+    lT, lB, cb2 = jnp.log(threshold), jnp.log(base), jnp.cbrt(2)
+    T, T2, T3 = threshold, threshold**2, threshold**3
+    A = T3 * (
+        56
+        + y * lB * (486 - 648 * scale * lT + 216 * scale**2 * lT**2)
+        - 522 * scale * lT
+        + 648 * scale**2 * lT**2
+        - 216 * scale**3 * lT**3
+    )
+    B = jnp.sqrt(4 * (-19 * T2 + 12 * scale * T2 * lT) ** 3 + A**2)
+    C = jnp.cbrt(A + B)
+    D = -9 + 6 * scale * lT
+    E = 2 * T * (-4 + 3 * scale * lT) / D
+    F = cb2 * (-19 * T2 + 12 * scale * T2 * lT)
+    return E - (F / (D * C)) + (C / (cb2 * D))
+
+
+@jit
+def spline_biexponential_jax(x, threshold=100, base=10, compression=1):
+    """
+    biexponential function with smooth transition to cubic polynomial between [-threshold, threshold]
+    """
+    x = jnp.asarray(x)
+    sign = jnp.sign(x)
+    x = jnp.abs(x)
+    diff = logb_jax(threshold, base) * (1.0 - compression)
+    x = jnp.where(
+        x > threshold,
+        logb_jax(x, base) - diff,
+        cubic_exp_fwd_jax(x, threshold, base=base, scale=compression),
+    )
+    return x * sign
+
+
+@jit
+def inverse_spline_biexponential_jax(y, threshold=100, base=10, compression=1):
+    """
+    inverse of spline_biexponential
+    """
+    y = jnp.asarray(y)
+    sign = jnp.sign(y)
+    y = jnp.abs(y)
+    diff = logb_jax(threshold, base) * (1.0 - compression)
+    transformed_threshold = cubic_exp_fwd_jax(threshold, threshold, base=base, scale=compression)
+    y = jnp.where(
+        y > transformed_threshold,
+        base ** (y + diff),
+        cubic_exp_inv_jax(y, threshold, base=base, scale=compression),
+    )
+    return y * sign
+
+
+
+logtransform_jax = partial(spline_biexponential_jax, threshold=100, compression=0.8)
+inv_logtransform_jax = partial(inverse_spline_biexponential_jax, threshold=100, compression=0.8)
 
 ##────────────────────────────────────────────────────────────────────────────}}}
 
@@ -827,8 +918,8 @@ def fit_stacked_poly_at_quantiles(x, y, w, quantiles, degree=1):
 def regression(x, y, w, xbounds, resolution, degree, logspace=True, endpoint=True):
     """returns the stacked_poly params to best express y as a function of x"""
     if logspace:
-        x, y = logtransform(x), logtransform(y)
-        xbounds = logtransform(xbounds)
+        x, y = logtransform_jax(x), logtransform_jax(y)
+        xbounds = logtransform_jax(xbounds)
     # params = fit_stacked_poly_uniform_spacing(x, y, w, *xbounds, resolution, degree, endpoint)
     quantiles = jnp.linspace(0.01, 0.99, resolution, endpoint=endpoint)
     params = fit_stacked_poly_at_quantiles(x, y, w, quantiles, degree)

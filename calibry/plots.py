@@ -642,7 +642,7 @@ CALIBRY_DEFAULT_DENSITY_CMAP = make_density_cmap('calibry_density', alpha_start=
 
 
 def density_histogram2d(
-    ax, X, Y, xrange, yrange, nbins, cmap=None, vmin=0.01, vmax=1, noise_smooth=0
+    ax, X, Y, xrange, yrange, nbins, cmap=None, vmin=0.01, vmax=None, noise_smooth=0
 ):
     if isinstance(nbins, int):
         nbins = (nbins, nbins)

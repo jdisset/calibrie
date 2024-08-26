@@ -42,7 +42,7 @@ abundances = linpipe.apply(observations)
 """
 
 from jaxopt import GaussNewton
-from .pipeline import Task
+from .pipeline import Task, DiagnosticFigure
 from .utils import Context
 import jax
 from jax import jit, vmap
@@ -217,7 +217,7 @@ class LinearCompensation(Task):
         self,
         ctx: Context,
         **kw,
-    ):
+    )-> Optional[List[DiagnosticFigure]]:
 
         assert self._spillover_matrix is not None, "Spillover matrix not computed"
         assert self._autofluorescence is not None, "Autofluorescence not computed"
@@ -229,8 +229,8 @@ class LinearCompensation(Task):
                 Context(observations_raw=ctx.controls_values, channel_names=ctx.channel_names)
             ).abundances_AU
 
-        f, a = spillover_matrix_plot(self._spillover_matrix, ctx.channel_names, ctx.protein_names)
-        f.suptitle("Spillover matrix", fontsize=16, y=1.05)
+        f1, a = spillover_matrix_plot(self._spillover_matrix, ctx.channel_names, ctx.protein_names)
+        f1.suptitle("Spillover matrix", fontsize=16, y=1.05)
 
         controls_abundances, std_models = utils.generate_controls_dict(
             self._controls_abundance_AU,
@@ -239,7 +239,7 @@ class LinearCompensation(Task):
             **kw,
         )
 
-        f, a = plots.unmixing_plot(
+        f2, a = plots.unmixing_plot(
             controls_abundances,
             ctx.protein_names,
             ctx.channel_names,
@@ -247,6 +247,8 @@ class LinearCompensation(Task):
             std_models=std_models,
             **kw,
         )
+
+        return [DiagnosticFigure(f1, "Spillover matrix"), DiagnosticFigure(f2, "Linear unmixing")]
 
     def compute_spectral_signature_ALS(self, max_iterations=50, jax_seed=0, verbose=False, w=None):
         # Spectral signature estimation using Alternating Least Squares (ALS) method.

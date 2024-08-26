@@ -20,3 +20,6 @@ class PandasExport(Task):
         ), f"Output shape {output.shape} does not match number of proteins {len(ctx.protein_names)}"
         output_df = pd.DataFrame(output, columns=ctx.protein_names)
         return Context(output_df=output_df)
+
+
+    # processed.to_csv(output_path / f'{f.stem}.csv', index=False)

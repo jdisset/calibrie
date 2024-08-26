@@ -3,7 +3,7 @@ from joblib import Memory
 cachedir = '/tmp/'
 memory = Memory(cachedir, verbose=0)
 from jaxopt import GaussNewton
-from .pipeline import Task
+from .pipeline import Task, DiagnosticFigure
 import jax
 from jax import jit, vmap
 import jax.numpy as jnp
@@ -699,6 +699,8 @@ class Colinearization(Task):
             ax.set_xlabel(channel_names[i])
             ax.set_ylabel(channel_names[i] + "'")
         fig.tight_layout()
+
+        return [DiagnosticFigure(fig, '')]
 
     def process(self, ctx):
         observations_raw = self.get_ctx(ctx, 'observations_raw')

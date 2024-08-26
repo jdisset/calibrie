@@ -27,3 +27,4 @@ dependencies = [
 
 [project.scripts]
 calibry-gating = "calibry.scripts.gating_ui:main"
+calibry-run = "calibry.scripts.run_pipeline:main"

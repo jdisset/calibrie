@@ -2,10 +2,10 @@
 This module provides the LoadControls task, which loads single, multi and no-protein controls from a list of files.
 """
 
-from .pipeline import Task
-from typing import List, Dict, Tuple
+from .pipeline import Task, DiagnosticFigure
+from typing import List, Dict, Tuple, Optional
 from . import utils as ut
-from calibry.utils import LoadedData
+from calibry.utils import LoadedData, Context
 import numpy as np
 import jax.numpy as jnp
 from . import plots, utils
@@ -48,7 +48,7 @@ class LoadControls(Task):
 
     color_controls: Dict[str | Tuple[str], LoadedData]
     use_channels: List[str] = []
-    use_reference_channels: Dict[str, str] = {} # protein -> channel
+    use_reference_channels: Dict[str, str] = {}  # protein -> channel
 
     def pick_reference_channels(self, max_sat_proportion=0.001, min_dyn_range=3, **_):
         # for each protein ctrl, we'll pick a reference channel as the one with the highest dynamic range
@@ -66,7 +66,8 @@ class LoadControls(Task):
             ]
             if len(unknown_provided) > 0:
                 self._log.warning(
-                    f'Unknown proteins {unknown_provided} in user_provided_reference_channels. Ignoring them.'
+                    f'''Ignoring proteins {unknown_provided}:
+                        declared a reference channel but are absent from controls.'''
                 )
         else:
             user_provided = [None] * len(self._protein_names)
@@ -106,14 +107,11 @@ class LoadControls(Task):
             )
         return ref_channels
 
-
     def process(self, ctx):
         loader = ctx.get('cell_data_loader', ut.load_to_df)
-
         data = loader(ctx.pipeline_input, self.use_channels).values
         assert data.shape[1] == len(self._channel_names)
         return Context(observations_raw=data)
-
 
     def initialize(self, ctx):
         loader = ctx.get('cell_data_loader', ut.load_to_df)
@@ -208,3 +206,21 @@ class LoadControls(Task):
             'saturation_thresholds': self._saturarion_thresholds,
             'reference_channels': self._reference_channels,
         }
+
+
+
+
+    def diagnostics(
+        self,
+        ctx: Context,
+        **kw,
+    )-> Optional[List[DiagnosticFigure]]:
+
+        f, _ = plots.plot_channels_to_reference(**ctx, **kw)
+
+        return [DiagnosticFigure(fig=f, name='Raw channels to reference')]
+
+
+
+
+
