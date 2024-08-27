@@ -22,9 +22,11 @@ class DiagnosticFigure(ArbitraryModel):
 
 
 class Task(ArbitraryModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True, protected_namespaces=())
 
     diagnostics_settings: dict[str, Any] = Field(default_factory=dict)
+
+    notes: str = ""
 
     def initialize(self, ctx: Context) -> Context:
         return Context()
@@ -92,19 +94,19 @@ class Pipeline(ArbitraryModel):
         for i, n in enumerate(names):
             total_count = names.count(n)
             if total_count == 1:
-                unique_names.append(n)
+                unique_names.append(f"{i:02d}_{n}")
             else:
                 current_count = names[:i].count(n)
-                unique_names.append(f"{n}_{current_count}")
+                unique_names.append(f"{i:02d}_{n}-{current_count}")
         return unique_names
 
     def all_diagnostics(self, **kw):
+
         unique_names = self.get_unique_task_names()
         all_figs = []
         for task, name in zip(self.tasks, unique_names):
             task_kwargs = {}
             for k, v in task.diagnostics_settings.items():
-                print(f"Setting {k} to {v} of type {type(v)}")
                 task_kwargs[k] = task.diagnostics_settings[k]
             task_kwargs.update(kw)
             print(f"Generating diagnostics for {name} with kwargs {task_kwargs}")

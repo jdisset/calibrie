@@ -1078,8 +1078,6 @@ class GatingTask(Task, Component):
             df = gate(df)
         return df
 
-    def process(self, ctx: Any) -> Any: ...
-
     def diagnostics(
         self,
         ctx: Any,

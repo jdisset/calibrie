@@ -680,6 +680,7 @@ def density_histogram2d(
         cmap=cmap,
         vmin=vmin,
         vmax=vmax,
+        interpolation='nearest',
     )
 
 
@@ -697,7 +698,7 @@ def unmixing_plot(
     std_lims=(1.5, 3),
     nbins=500,
     noise_smooth=0.25,
-    density_lims=(0.01, 1.5),
+    density_lims=(1e-6, None),
     draw_acceptable_std_line_at=2,
     **_,
 ):

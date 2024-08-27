@@ -101,8 +101,8 @@ class ProteinMapping(Task):
 
         classname = self.__class__.__name__
         return [
-            DiagnosticFigure(fmap, f'{classname}_mapping'),
-            DiagnosticFigure(f, f'{classname}_unmixing'),
+            DiagnosticFigure(fmap, f'mapping to ref protein'),
+            DiagnosticFigure(f, f'unmixing'),
         ]
 
 

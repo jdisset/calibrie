@@ -1,8 +1,12 @@
 import dracon as dr
+import json
 from dracon.utils import with_indent
 from dracon.interpolation import LazyDraconModel
+import pandas as pd
+import time
 from dracon.resolvable import Resolvable
 from dracon.commandline import Program, make_program, Arg
+import dracon
 import calibry as cal
 from pathlib import Path
 from typing import List, Tuple, Union, Annotated, Dict, Any
@@ -10,6 +14,7 @@ from pydantic import BaseModel
 import sys
 from pathlib import Path
 import json5
+from calibry.pipeline import DiagnosticFigure
 from calibry import (
     GatingTask,
     PolygonGate,
@@ -19,8 +24,12 @@ from calibry import (
     MEFBeadsCalibration,
     PandasExport,
     AbundanceCutoff,
-    Pipeline
+    Pipeline,
 )
+import matplotlib
+
+matplotlib.use('Agg')
+
 
 def parse_xpfile(xpfile: str):
     filepath = Path(xpfile).expanduser().resolve()
@@ -31,16 +40,28 @@ def parse_xpfile(xpfile: str):
     return data
 
 
+def run_and_save_diagnostics(pipeline, outputdir):
+    figs: List[DiagnosticFigure] = pipeline.all_diagnostics()
+    outputdir = Path(outputdir).expanduser().resolve()
+    outputdir.mkdir(parents=True, exist_ok=True)
+    for fig in figs:
+        fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
+        print(f'Saving {fname} to {outputdir}')
+        fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300)
+
+
 class CalibrationProgram(LazyDraconModel):
-    pipeline: Annotated[Resolvable[cal.Pipeline], Arg(help='The pipeline to execute', resolvable=True, is_file=True)]
+    pipeline: Annotated[
+        Resolvable[cal.Pipeline], Arg(help='The pipeline to execute', resolvable=True, is_file=True)
+    ]
     xpfile: Annotated[str, Arg(help='Input experiment file to load')] = './experiment.json5'
     outputdir: Annotated[str, Arg(help='The output directory')] = '.'
     datapath: Annotated[
         str, Arg(help='The path to the directory containing the data files, relative to the xpfile')
     ] = './data/raw_data/'
+    diagnostics: Annotated[bool, Arg(help='Whether to generate diagnostic figures')] = True
 
-    def get_pipeline(self):
-
+    def build_pipeline(self):
         self._datadir = (Path(self.xpfile).parent / self.datapath).expanduser().resolve()
         self._xpdata = parse_xpfile(self.xpfile)
 
@@ -52,7 +73,9 @@ class CalibrationProgram(LazyDraconModel):
         assert beads_file.exists(), f'File {beads_file} not found for beads'
 
         # load color controls
-        self._control_files = {s['name']: (self._datadir / s['file']).as_posix() for s in control_samples}
+        self._control_files = {
+            s['name']: (self._datadir / s['file']).as_posix() for s in control_samples
+        }
         for name, path in self._control_files.items():
             assert Path(path).exists(), f'File {path} not found for control {name}'
 
@@ -66,115 +89,58 @@ class CalibrationProgram(LazyDraconModel):
         self._context['$XP_DATADIR'] = self._datadir.as_posix()
         self._context['$CALIBRATION_OUTPUT_DIR'] = self._outputdir.as_posix()
 
-        pipeline = self.pipeline.resolve(context=self._context, interpolate_all=True)
+        self._resolved_pipeline = self.pipeline.resolve(context=self._context, interpolate_all=True)
 
-        return pipeline
+        return self._resolved_pipeline
+
+    def calibrate_file(self, sample):
+        data_path = (self._datadir / sample['file']).as_posix()
+        ctx_out = self._resolved_pipeline.apply_all(data_path)
+        data: pd.DataFrame = ctx_out.output_df
+        assert isinstance(data, pd.DataFrame), f'Expected DataFrame, got {type(data)}'
+
+        # pipeline_json = pipeline.model_dump_json(indent=2)
+        # xp_json = json.dumps({k: v for k, v in calib._xpdata.items() if k != 'samples'}, indent=2)
+        # sample_json = json.dumps(sample, indent=2)
+
+        pipeline_dict = self._resolved_pipeline.model_dump()
+        xp_dict = {k: v for k, v in self._xpdata.items() if k != 'samples'}
+        sample_dict = sample
+
+        data.attrs['calibration'] = {
+            'pipeline': pipeline_dict,
+            'date': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'args': args,
+        }
+        data.attrs['xp'] = xp_dict
+        data.attrs['sample'] = sample_dict
+        self._outputdir.mkdir(parents=True, exist_ok=True)
+        output_path = self._outputdir / f'{sample["name"]}.parquet'
+        print(f'Saving calibrated data to {output_path}')
+        data.to_parquet(output_path, compression='snappy')
+
+    def run(self):
+        self.build_pipeline()
+        self._resolved_pipeline.initialize()
+        if self.diagnostics:
+            run_and_save_diagnostics(self._resolved_pipeline, self._outputdir)
+
+        samples = self._xpdata['samples']
+        for s in samples:
+            if not s['control']:
+                print(f"Processing sample {s['name']}")
+                self.calibrate_file(s)
 
 
-
-prog = make_program(
-    CalibrationProgram,
-    name='calibry-run',
-    description='Calibration of data files and experiments.',
-)
-
-xpfile = '~/Dropbox (MIT)/Biocomp_v2/Experiments/2024-08-09_BPBRTL/experiment.json5'
-calib = prog.parse_args(['--pipeline', './example_pipeline.yaml', '--xpfile', xpfile])
-pipeline = calib.get_pipeline()
-
-pipeline.tasks[0]
-
-##
-
-pipeline.initialize()
-
-##
-
-all_figs = pipeline.all_diagnostics()
-
-
-## {{{                     --     run + diagnostics     --
-
-import matplotlib.pyplot as plt
-
-# diagnostic_dir = Path(calibration_dir / 'unmixing_diagnostics')
-# diagnostic_dir.mkdir(exist_ok=True)
-
-
-# try:
-# some diagnostic plots:
-cal.plots.plot_channels_to_reference(
-    **pipeline._context,
-    logscale=True,
-    ylims=[-1e2, 2e5],
-    dpi=150,
-)
-fig = plt.gcf()
-fig.tight_layout()
-# fig.savefig(diagnostic_dir / 'channels_to_reference.png', dpi=150)
-# except Exception as e:
-# print(f'Error while plotting: {e}')
-
-pipeline.diagnostics("GatingTask", use_files=calib._control_files.values())
-fig = plt.gcf()
-fig.tight_layout()
-# fig.savefig(diagnostic_dir / 'linear_compensation.png', dpi=150)
-
-try:
-    pipeline.diagnostics(
-        "LinearCompensation",
-        xlims=[-1e5, 1e5],
-        ylims=[-1e3, 5e5],
+if __name__ == '__main__':
+    prog = make_program(
+        CalibrationProgram,
+        name='calibry-run',
+        description='Calibration of data files and experiments.',
     )
-    fig = plt.gcf()
-    fig.tight_layout()
-    # fig.savefig(diagnostic_dir / 'linear_compensation.png', dpi=150)
-except Exception as e:
-    print(f'Error while plotting linear compensation: {e}')
 
-pipeline.diagnostics(
-    "ProteinMapping",
-    xlims=[-1e5, 1e5],
-    ylims=[-1e3, 2e5],
-    target_bounds=[-100, 1e6],
-    other_bounds=[-100, 1e6],
-    # logspace=False,
-)
-# for n, f in pipeline._context['diagnostics_ProteinMapping'].items():
-    # f.savefig(diagnostic_dir / f'{n}_pmap.png', dpi=150)
-# except Exception as e:
-# print(f'Error while plotting protein mapping: {e}')
+    # xpfile = '~/Dropbox (MIT)/Biocomp_v2/Experiments/2024-08-09_BPBRTL/experiment.json5'
+    # calib, args = prog.parse_args(['--pipeline', './example_pipeline.yaml', '--xpfile', xpfile])
 
-
-try:
-    pipeline.diagnostics("Colinearization")
-    fig = plt.gcf()
-    # fig.savefig(diagnostic_dir / 'colinearization.png', dpi=150)
-except Exception as e:
-    print(f'Error while plotting colinearization: {e}')
-
-try:
-    pipeline.diagnostics(
-        'MEFBeadsCalibration',
-        xlims=[-1e5, 1e5],
-        ylims=[-1e3, 5e5],
-    )
-    # for n, f in pipeline._context['diagnostics_MEFBeadsCalibration'].items():
-        # f.savefig(diagnostic_dir / f'{n}_beads.png', dpi=150)
-except Exception as e:
-    print(f'Error while plotting beads calibration: {e}')
-
-# cal.plots.plot_raw_all_prot_crl(**linpipe.context, logscale=True, dpi=150)
-
-##────────────────────────────────────────────────────────────────────────────}}}
-
-
-##
-samples = calib._xpdata['samples']
-for s in samples:
-    if not s['control']:
-        print(f"Processing sample {s['name']}")
-        fullpath = (calib._datadir / s['file']).as_posix()
-
-## TODO:
-# remove the _A remover
+    calib, args = prog.parse_args(sys.argv[1:])
+    calib.run()
