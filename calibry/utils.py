@@ -775,6 +775,11 @@ def cmap_spline(
 ##────────────────────────────────────────────────────────────────────────────}}}
 
 
+def add_calibration_metadata(df, task_name, metadata):
+    if 'calibration_info' not in df.attrs:
+        df.attrs['calibration_info'] = {}
+    df.attrs['calibration_info'][task_name] = metadata
+
 def tree_stack(trees):
     # stack the leaves of a list of pytrees into a single pytree
     # from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75

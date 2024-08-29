@@ -22,11 +22,17 @@ class DiagnosticFigure(ArbitraryModel):
 
 
 class Task(ArbitraryModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True, protected_namespaces=())
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True, validate_default=True, protected_namespaces=()
+    )
 
     diagnostics_settings: dict[str, Any] = Field(default_factory=dict)
-
+    priority: float = Field(default=0, description="Execution order of the task. Lower is earlier.")
     notes: str = ""
+
+    def model_post_init(self, *args):
+        super().model_post_init(*args)
+        self._name: str = ""
 
     def initialize(self, ctx: Context) -> Context:
         return Context()
@@ -41,8 +47,10 @@ class Task(ArbitraryModel):
 
 
 class Pipeline(ArbitraryModel):
-    tasks: List[Task]
+    tasks: Dict[str, Task]
     loglevel: str = "NOTSET"
+    notes: str = ""
+    name: str = ""
 
     def model_post_init(self, *args):
         super().model_post_init(*args)
@@ -55,69 +63,61 @@ class Pipeline(ArbitraryModel):
         logging_handler._log_render.show_path = False
         self._log.addHandler(logging_handler)
         self._log.setLevel(self.loglevel)
-        for task in self.tasks:
-            task._log = self._log.getChild(task.__class__.__name__)
+        self._ordered_task_list: List[Task] = []
+        for task_name, task in self.tasks.items():
+            task._log = self._log.getChild(task_name)
+
+    def order_tasks_and_assign_names(self):
+        # make sure each task has its name
+        for task_name, task in self.tasks.items():
+            task._name = task_name
+        self._ordered_task_list = sorted(self.tasks.values(), key=lambda t: t.priority)
 
     def initialize(self):
+        self.order_tasks_and_assign_names()
+
         self._context = Context()
-        for task in self.tasks:
+        for task in self._ordered_task_list:
             self._log.debug(f"Initializing task {task.__class__.__name__}")
             self._context.update(task.initialize(self._context))
 
     def apply_all(self, input):
+        self.order_tasks_and_assign_names()
+
         self._context.pipeline_input = input
         last_output = None
-        for task in self.tasks:
+        for task in self._ordered_task_list:
+            print(f"Applying task {task.__class__.__name__}")
             self._log.debug(f"Applying task {task.__class__.__name__}")
             last_output = task.process(self._context)
             self._context.update(last_output)
         return last_output
 
-    def diagnostics(self, task_name, idx=None, **kw) -> Optional[List[DiagnosticFigure]]:
-        names = [t.__class__.__name__ for t in self.tasks]
-        if task_name not in names:
+    def diagnostics(self, task_name, **kw) -> Optional[List[DiagnosticFigure]]:
+        self.order_tasks_and_assign_names()
+
+        if task_name not in self.tasks:
             raise ValueError(f"Task {task_name} not found in pipeline")
-        # how many tasks with this name?
-        n = names.count(task_name)
-        if n == 1:
-            idx = 0
-        elif idx is None:
-            raise ValueError(
-                f"Task {task_name} found {n} times in pipeline. Please specify which one to use with the `idx` argument"
-            )
-        figs = self.tasks[names.index(task_name) + idx].diagnostics(self._context, **kw)
+        task = self.tasks[task_name]
+        figs = task.diagnostics(self._context, **kw)
         return figs
 
-    def get_unique_task_names(self):
-        names = [t.__class__.__name__ for t in self.tasks]
-        unique_names = []
-        for i, n in enumerate(names):
-            total_count = names.count(n)
-            if total_count == 1:
-                unique_names.append(f"{i:02d}_{n}")
-            else:
-                current_count = names[:i].count(n)
-                unique_names.append(f"{i:02d}_{n}-{current_count}")
-        return unique_names
-
     def all_diagnostics(self, **kw):
+        self.order_tasks_and_assign_names()
 
-        unique_names = self.get_unique_task_names()
         all_figs = []
-        for task, name in zip(self.tasks, unique_names):
-            task_kwargs = {}
-            for k, v in task.diagnostics_settings.items():
-                task_kwargs[k] = task.diagnostics_settings[k]
+        for task in self._ordered_task_list:
+            task_kwargs = task.diagnostics_settings.copy()
             task_kwargs.update(kw)
-            print(f"Generating diagnostics for {name} with kwargs {task_kwargs}")
-            self._log.debug(f"Generating diagnostics for {name}")
+            print(f"Generating diagnostics for {task._name} with kwargs {task_kwargs}")
+            self._log.debug(f"Generating diagnostics for {task._name}")
             figs = task.diagnostics(self._context, **task_kwargs)
             if figs:
                 if isinstance(figs, list):
                     for fig in figs:
-                        fig.source_task = name
+                        fig.source_task = task._name
                     all_figs.extend(figs)
                 else:
-                    figs.source_task = name
+                    figs.source_task = task._name
                     all_figs.append(figs)
         return all_figs

@@ -10,7 +10,7 @@ from functools import partial
 from . import plots, utils
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple
-from .utils import Context
+from .utils import Context, add_calibration_metadata
 
 
 class AbundanceCutoff(Task):

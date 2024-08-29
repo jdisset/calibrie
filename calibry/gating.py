@@ -13,7 +13,7 @@ import xdialog
 import calibry
 import calibry.utils
 from calibry.pipeline import Task, DiagnosticFigure
-from calibry.utils import spline_biexponential, inverse_spline_biexponential
+from calibry.utils import spline_biexponential, inverse_spline_biexponential, add_calibration_metadata
 from pydantic import BaseModel, Field, ConfigDict
 from numpy.typing import NDArray
 import numpy as np
@@ -1068,7 +1068,15 @@ class GatingTask(Task, Component):
     def load_cells(self, data, column_order=None) -> Any:
         # first load with all columns, and apply the gates
         df = calibry.utils.load_to_df(data)
+        prev_n_rows = len(df)
         df = self.apply_all_gates(df)
+        n_rows = len(df)
+
+        add_calibration_metadata(df, self._name, {
+            'n_before_gating': prev_n_rows,
+            'n_after_gating': n_rows,
+        })
+
         if column_order is not None:
             return df[column_order]
         return df

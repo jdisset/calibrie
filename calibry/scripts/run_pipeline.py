@@ -46,7 +46,6 @@ def run_and_save_diagnostics(pipeline, outputdir):
     outputdir.mkdir(parents=True, exist_ok=True)
     for fig in figs:
         fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
-        print(f'Saving {fname} to {outputdir}')
         fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300)
 
 
@@ -88,6 +87,7 @@ class CalibrationProgram(LazyDraconModel):
         self._context['$XP_DIRNAME'] = Path(self.xpfile).parent.name
         self._context['$XP_DATADIR'] = self._datadir.as_posix()
         self._context['$CALIBRATION_OUTPUT_DIR'] = self._outputdir.as_posix()
+        print(f'Context: {self._context}')
 
         self._resolved_pipeline = self.pipeline.resolve(context=self._context, interpolate_all=True)
 
@@ -110,14 +110,15 @@ class CalibrationProgram(LazyDraconModel):
         data.attrs['calibration'] = {
             'pipeline': pipeline_dict,
             'date': time.strftime('%Y-%m-%d %H:%M:%S'),
-            'args': args,
+            'raw_args': sys.argv[1:],
         }
         data.attrs['xp'] = xp_dict
         data.attrs['sample'] = sample_dict
         self._outputdir.mkdir(parents=True, exist_ok=True)
         output_path = self._outputdir / f'{sample["name"]}.parquet'
         print(f'Saving calibrated data to {output_path}')
-        data.to_parquet(output_path, compression='snappy')
+        # data.to_parquet(output_path, compression='snappy')
+        data.to_parquet(output_path, compression='zstd')
 
     def run(self):
         self.build_pipeline()
@@ -132,15 +133,18 @@ class CalibrationProgram(LazyDraconModel):
                 self.calibrate_file(s)
 
 
-if __name__ == '__main__':
+# xpfile = '~/Dropbox (MIT)/Biocomp_v2/Experiments/2024-08-09_BPBRTL/experiment.json5'
+# calib, args = prog.parse_args(['--pipeline', './example_pipeline.yaml', '--xpfile', xpfile, '--outputdir', './output'])
+
+def main():
     prog = make_program(
         CalibrationProgram,
         name='calibry-run',
         description='Calibration of data files and experiments.',
     )
 
-    # xpfile = '~/Dropbox (MIT)/Biocomp_v2/Experiments/2024-08-09_BPBRTL/experiment.json5'
-    # calib, args = prog.parse_args(['--pipeline', './example_pipeline.yaml', '--xpfile', xpfile])
-
     calib, args = prog.parse_args(sys.argv[1:])
     calib.run()
+
+if __name__ == '__main__':
+    main()
