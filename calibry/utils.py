@@ -285,7 +285,10 @@ def load_to_df(data, column_order=None):
         # add path to metadata
         df.attrs = {'from_file': data}
     if column_order is not None:
-        df = df[escape(column_order)]
+        try:
+            df = df[escape(column_order)]
+        except KeyError:
+            raise KeyError(f'Column order {column_order} not found. Available : {list(df.columns)}')
     # reset index so that it is ordered
     df = df.reset_index(drop=True)
     return df

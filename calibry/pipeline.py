@@ -9,6 +9,16 @@ from matplotlib.figure import Figure
 
 MISSING = object()
 
+import xxhash
+import base64
+import json
+
+
+def generate_hash(data):
+    xxhash_obj = xxhash.xxh64()
+    xxhash_obj.update(str(data).encode())
+    return base64.b64encode(xxhash_obj.digest()).decode().rstrip('=')
+
 
 class DiagnosticFigure(ArbitraryModel):
     fig: Figure
@@ -67,6 +77,15 @@ class Pipeline(ArbitraryModel):
         for task_name, task in self.tasks.items():
             task._log = self._log.getChild(task_name)
 
+    def get_namehash(self):
+        self_json = self.model_dump()
+        if "name" in self_json:
+            del self_json["name"]
+        if "loglevel" in self_json:
+            del self_json["loglevel"]
+        self_json = json.dumps(self_json, sort_keys=True)
+        return f"{self.name}-{generate_hash(self_json)}"
+
     def order_tasks_and_assign_names(self):
         # make sure each task has its name
         for task_name, task in self.tasks.items():
@@ -106,18 +125,19 @@ class Pipeline(ArbitraryModel):
         self.order_tasks_and_assign_names()
 
         all_figs = []
-        for task in self._ordered_task_list:
+        for i, task in enumerate(self._ordered_task_list):
             task_kwargs = task.diagnostics_settings.copy()
             task_kwargs.update(kw)
             print(f"Generating diagnostics for {task._name} with kwargs {task_kwargs}")
             self._log.debug(f"Generating diagnostics for {task._name}")
             figs = task.diagnostics(self._context, **task_kwargs)
+            istr = str(i).zfill(2)
             if figs:
                 if isinstance(figs, list):
                     for fig in figs:
-                        fig.source_task = task._name
+                        fig.source_task = f'{istr}_{task._name}'
                     all_figs.extend(figs)
                 else:
-                    figs.source_task = task._name
+                    figs.source_task = f'{istr}_{task._name}'
                     all_figs.append(figs)
         return all_figs

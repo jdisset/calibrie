@@ -6,6 +6,7 @@ import copy
 import shapely.geometry as sg
 import time
 import dracon as dr
+from .utils import Context, LoadedData
 import matplotlib.colors as mcolors
 import dearpygui.dearpygui as dpg
 from pathlib import Path
@@ -1063,7 +1064,7 @@ class GatingTask(Task, Component):
                 gate.update_plot()
 
     def initialize(self, ctx: Any) -> Any:
-        return {'cell_data_loader': self.load_cells}
+        return Context(cell_data_loader=self.load_cells)
 
     def load_cells(self, data, column_order=None) -> Any:
         # first load with all columns, and apply the gates
@@ -1076,9 +1077,14 @@ class GatingTask(Task, Component):
             'n_before_gating': prev_n_rows,
             'n_after_gating': n_rows,
         })
+        print(f"LOADER--gating: Loaded {prev_n_rows} -> {n_rows} cells")
 
         if column_order is not None:
-            return df[column_order]
+            try:
+                return df[column_order]
+            except KeyError as e:
+                raise ValueError(f"When loading cells, asked for unknown column {e}. Available: {list(df.columns)}")
+
         return df
 
     def apply_all_gates(self, df):

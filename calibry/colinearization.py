@@ -2,6 +2,7 @@ from joblib import Memory
 
 cachedir = '/tmp/'
 memory = Memory(cachedir, verbose=0)
+from .utils import Context
 from jaxopt import GaussNewton
 from .pipeline import Task, DiagnosticFigure
 import jax
@@ -195,7 +196,6 @@ def find_colinearization_sequence(
         linearized_channels_quality: np.ndarray,
         remaining_channel_ids: np.ndarray,
     ):
-
         # protein id of the best range for each channel
         allpsources = best_range_prot_per_channel[remaining_channel_ids]
         # shape of *_dest_ranges_in_source_prot should be (nremaining_channels, nlinearized_channels),
@@ -378,7 +378,6 @@ def find_best_linearization_path(
     indep_power=2,
     exclude_channels=None,
 ):
-
     # Completely independent groups of channels are not much of an issue, (even though not ideal).
     # What is much more annoying, is when there are some proteins for which some of the channels
     # of different group have a simultanous signal. That's bad. We want to find a set of groups that will maximize
@@ -437,7 +436,6 @@ import itertools
 
 
 class Colinearization(Task):
-
     # switch to pydantic model
 
     information_range_threshold: float = 0.02
@@ -539,18 +537,20 @@ class Colinearization(Task):
                         pbar.update(1)
         return params
 
-    def initialize(self, ctx):
+    def initialize(self, ctx: Context):
 
-        controls_values = self.get_ctx(ctx, 'controls_values')
-        controls_masks = self.get_ctx(ctx, 'controls_masks')
-        channel_names = self.get_ctx(ctx, 'channel_names')
-        protein_names = self.get_ctx(ctx, 'protein_names')
-        reference_channels = self.get_ctx(ctx, 'reference_channels')
+        self._controls_values = ctx.controls_values
+        self._controls_masks = ctx.controls_masks
+        self._channel_names = ctx.channel_names
+        self._protein_names = ctx.protein_names
+        self._reference_channels = ctx.reference_channels
 
         t0 = time.time()
 
-        autofluorescence = utils.estimate_autofluorescence(controls_values, controls_masks)
-        corrected_controls = controls_values - autofluorescence
+        autofluorescence = utils.estimate_autofluorescence(
+            self._controls_values, self._controls_masks
+        )
+        corrected_controls = self._controls_values - autofluorescence
         self._corrected_saturation_thresholds = utils.estimate_saturation_thresholds(
             corrected_controls
         )
@@ -559,21 +559,24 @@ class Colinearization(Task):
         # let's resample the single prot ctrls and put them all in a single array
         self._singleptr_observations = resampled_singleprt_ctrls(
             corrected_controls,
-            protein_names,
-            controls_masks,
-            reference_channels,
+            self._protein_names,
+            self._controls_masks,
+            self._reference_channels,
             self.resample_N,
             npartitions=0,
         )
 
-        assert self._singleptr_observations.shape == (
-            len(protein_names),
-            self.resample_N,
-            len(channel_names),
-        ), f"{self._singleptr_observations.shape} != {(len(protein_names), self.resample_N, len(channel_names))}"
+        assert (
+            self._singleptr_observations.shape
+            == (
+                len(self._protein_names),
+                self.resample_N,
+                len(self._channel_names),
+            )
+        ), f"{self._singleptr_observations.shape} != {(len(self._protein_names), self.resample_N, len(self._channel_names))}"
 
         # null_observations is the array of unstained cells observations
-        self._null_observations = corrected_controls[np.all(controls_masks == 0, axis=1)]
+        self._null_observations = corrected_controls[np.all(self._controls_masks == 0, axis=1)]
 
         self._not_saturated = (
             self._singleptr_observations > self._corrected_saturation_thresholds[:, 0]
@@ -601,14 +604,14 @@ class Colinearization(Task):
             self._acceptable_range * self._unsaturated_proportion, axis=0
         )
 
-        nchannels, nproteins = len(channel_names), len(protein_names)
+        nchannels, nproteins = len(self._channel_names), len(self._protein_names)
 
         if self._linearization_path is None and self.params is None:
             self._log.debug(f"Looking for a good linearization path")
 
             exclude_list = None
             if self.exclude_channels is not None:
-                exclude_list = [channel_names.index(c) for c in self.exclude_channels]
+                exclude_list = [self._channel_names.index(c) for c in self.exclude_channels]
 
             self._linearization_path, _ = find_best_linearization_path(
                 nchannels,
@@ -623,14 +626,14 @@ class Colinearization(Task):
             self._log.debug("Using linearization plan:")
             self._log.debug(self._linearization_path)
             self._log.debug(f"Computing linearization params")
-            self.params = self.find_linearization_params(channel_names)
+            self.params = self.find_linearization_params(self._channel_names)
 
         self._log.debug(f"Computing new controls values")
-        self._new_controls_values = self.process({'observations_raw': controls_values})[
+        self._new_controls_values = self.process({'observations_raw': self._controls_values})[
             'observations_raw'
         ]
         self._new_autofluorescence = utils.estimate_autofluorescence(
-            self._new_controls_values, controls_masks
+            self._new_controls_values, self._controls_masks
         )
         self._new_saturation_thresholds = utils.estimate_saturation_thresholds(
             self._new_controls_values
@@ -639,14 +642,15 @@ class Colinearization(Task):
         self._log.debug(f"Linearization initialization done in {time.time() - t0:.1f}s")
         self._log.debug(f"newcontrols_values shape: {self._new_controls_values.shape}")
 
-        return {
-            'controls_values': self._new_controls_values,
-            'autofluorescence': self._new_autofluorescence,
-            'saturation_thresholds': self._new_saturation_thresholds,
-            'linearization_path': self._linearization_path,
-            'linearization_params': self.params,
-            'colinearizer': self,
-        }
+
+        return Context(
+                controls_values=self._new_controls_values,
+                autofluorescence=self._new_autofluorescence,
+                saturation_thresholds=self._new_saturation_thresholds,
+                linearization_path=self._linearization_path,
+                linearization_params=self.params,
+                colinearizer=self,
+            )
 
     @partial(jit, static_argnums=(0,))
     def _generate_single_identity_transform(self, xbounds):
@@ -684,7 +688,6 @@ class Colinearization(Task):
         return np.stack(res, axis=0)
 
     def diagnostics(self, ctx, **_):
-
         saturation_thresholds = self.get_ctx(ctx, 'saturation_thresholds')
         channel_names = self.get_ctx(ctx, 'channel_names')
 

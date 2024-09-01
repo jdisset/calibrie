@@ -15,12 +15,13 @@ from typing import List, Dict, Tuple, Any, Callable
 
 
 class ProteinMapping(Task):
-
     reference_protein: str
     logspace: bool = True
     model_resolution: int = 10
     model_degree: int = 2
     model_quantile_bounds: Tuple[float, float] = (0.05, 0.999)
+
+    apply_mef_transform: bool = True
 
     def model_post_init(self, *args, **kwargs):
         super().model_post_init(*args, **kwargs)
@@ -66,6 +67,20 @@ class ProteinMapping(Task):
         )
         self._log.debug(f'Done')
 
+        if self.apply_mef_transform:
+            if 'transform_to_MEF' not in ctx:
+                raise ValueError('MEF transform not found in context')
+            self._log.debug('Applying MEF transform to controls')
+
+            self._calibration_channel_name = ctx.channel_names[
+                ctx.reference_channels[self._reference_protid]
+            ]
+
+            self._controls_abundances_mapped_MEF = ctx.transform_to_MEF(
+                self._controls_abundances_mapped, channel_names=[self._calibration_channel_name]
+            )
+            self._log.debug('Done')
+
         return Context(
             controls_abundances_mapped=self._controls_abundances_mapped,
             reference_protein_name=self.reference_protein,
@@ -74,10 +89,15 @@ class ProteinMapping(Task):
 
     def process(self, ctx: Context):
         abundances_mapped = self._apply_prtmap(ctx.abundances_AU, self._regression_results)
+        if self.apply_mef_transform:
+            abundances_mapped_MEF = ctx.transform_to_MEF(
+                abundances_mapped, channel_names=[self._calibration_channel_name]
+            )
+            return Context(abundances_mapped=abundances_mapped, abundances_MEF=abundances_mapped_MEF)
+
         return Context(abundances_mapped=abundances_mapped)
 
     def diagnostics(self, ctx: Context, **kw):
-
         # update with self.diagnostic_kwargs
 
         nbins = kw.pop('nbins', 300)
@@ -85,7 +105,7 @@ class ProteinMapping(Task):
         fmap, _ = self.plot_mapping(ctx.protein_names, nbins=nbins, **kw)
 
         controls_abundances, std_models = utils.generate_controls_dict(
-            self._controls_abundances_mapped,
+            self._controls_abundances_mapped_MEF,
             ctx.controls_masks,
             ctx.protein_names,
             **kw,
@@ -104,7 +124,6 @@ class ProteinMapping(Task):
             DiagnosticFigure(fmap, f'mapping to ref protein'),
             DiagnosticFigure(f, f'unmixing'),
         ]
-
 
     def plot_mapping(
         self, protein_names, nbins=300, logspace=True, target_bounds=None, other_bounds=None, **kw
