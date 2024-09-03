@@ -5,19 +5,17 @@ from calibry.utils import ArbitraryModel, Context
 from typing import List, Dict, Any, Optional, Union
 from pydantic import Field, ConfigDict
 from matplotlib.figure import Figure
-
-
-MISSING = object()
-
 import xxhash
 import base64
 import json
+
+MISSING = object()
 
 
 def generate_hash(data):
     xxhash_obj = xxhash.xxh64()
     xxhash_obj.update(str(data).encode())
-    return base64.b64encode(xxhash_obj.digest()).decode().rstrip('=')
+    return base64.b32encode(xxhash_obj.digest()).decode().rstrip('=')
 
 
 class DiagnosticFigure(ArbitraryModel):
@@ -97,6 +95,7 @@ class Pipeline(ArbitraryModel):
 
         self._context = Context()
         for task in self._ordered_task_list:
+            print(f"Initializing task {task.__class__.__name__}")
             self._log.debug(f"Initializing task {task.__class__.__name__}")
             self._context.update(task.initialize(self._context))
 

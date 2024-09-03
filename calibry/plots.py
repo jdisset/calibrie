@@ -688,12 +688,13 @@ def unmixing_plot(
     controls_abundances,
     protein_names,
     channel_names,
-    xlims=[-1e6, 1e6],
-    ylims=[-1e2, 1e6],
+    xlims=[-3e6, 3e6],
+    ylims=[-1e2, 3e6],
     description='',
     linthresh=200,
+    autofluorescence=None,
     linscale=0.4,
-    max_n_points=100000,
+    max_n_points=500000,
     std_models=None,
     std_lims=(1.5, 3),
     nbins=500,
@@ -721,7 +722,7 @@ def unmixing_plot(
                     0.5,
                     f'unmixing of\n'
                     f'{prot_name} control\n'
-                    f'({description}{len(channel_names)} channels)',
+                    f'({description}{len(channel_names)} channels, {X.shape[0]} points)',
                     horizontalalignment='center',
                     verticalalignment='center',
                     transform=ax.transAxes,
@@ -768,8 +769,8 @@ def unmixing_plot(
                 std_ratio = np.log10(np.maximum(yrange, 1)) / np.log10(np.maximum(stdl, 1.1))
 
                 # we want a background that shows stdl as color
-                xlims_tr = ax.get_xlim()
-                ylims_tr = ax.get_ylim()
+                # xlims_tr = ax.get_xlim()
+                # ylims_tr = ax.get_ylim()
                 mx, my = np.meshgrid(
                     np.linspace(*xlims_tr, 2),
                     np.concatenate([[ylims_tr[0]], xl, [ylims_tr[1]]]),
@@ -804,6 +805,9 @@ def unmixing_plot(
                         zorder=0,
                     )
                     ax.clabel(cnt, inline=True, fontsize=8, fmt='%.1f')
+
+            ax.set_xlim(xlims_tr)
+            ax.set_ylim(ylims_tr)
 
             ax.set_ylabel(f'{ctrl_name}')
             ax.set_xlabel(f'{prot_name}')

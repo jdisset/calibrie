@@ -23,6 +23,8 @@ dependencies = [
 	"tqdm",
 	"scipy",
 	"xdialog",
+	"rich",
+	"joblib",
 ]
 
 [project.scripts]

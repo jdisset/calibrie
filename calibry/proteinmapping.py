@@ -69,7 +69,9 @@ class ProteinMapping(Task):
 
         if self.apply_mef_transform:
             if 'transform_to_MEF' not in ctx:
-                raise ValueError('MEF transform not found in context')
+                raise ValueError(
+                    f'MEF transform not found in context. Available keys: {ctx.keys()}'
+                )
             self._log.debug('Applying MEF transform to controls')
 
             self._calibration_channel_name = ctx.channel_names[
@@ -93,7 +95,9 @@ class ProteinMapping(Task):
             abundances_mapped_MEF = ctx.transform_to_MEF(
                 abundances_mapped, channel_names=[self._calibration_channel_name]
             )
-            return Context(abundances_mapped=abundances_mapped, abundances_MEF=abundances_mapped_MEF)
+            return Context(
+                abundances_mapped=abundances_mapped, abundances_MEF=abundances_mapped_MEF
+            )
 
         return Context(abundances_mapped=abundances_mapped)
 

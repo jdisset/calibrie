@@ -208,11 +208,6 @@ def find_colinearization_sequence(
             allpsources, remaining_channel_ids
         ]  # shape (nremaining_channels,)
 
-        allpsources
-        norm_dest_ranges_in_source_prot
-        absolute_source_ranges
-        absolute_dest_ranges_in_source_prot
-
         # mapping quality is a heuristic for the quality of the regression (expressing source_chan as a function of dest_chan)
         # as a first approximation, range(x) / range(y) is not too bad to favor mapping to channels with a lot of signal
         mapping_qualities = (
@@ -245,9 +240,6 @@ def find_colinearization_sequence(
         next_linearized_quality = np.concatenate(
             [linearized_channels_quality, best_qualities[valid]]
         )
-
-        next_linearized_ids
-        next_remaining_channel_ids
 
         return [next_round] + _impl(
             next_linearized_ids,
@@ -538,7 +530,6 @@ class Colinearization(Task):
         return params
 
     def initialize(self, ctx: Context):
-
         self._controls_values = ctx.controls_values
         self._controls_masks = ctx.controls_masks
         self._channel_names = ctx.channel_names
@@ -629,9 +620,10 @@ class Colinearization(Task):
             self.params = self.find_linearization_params(self._channel_names)
 
         self._log.debug(f"Computing new controls values")
-        self._new_controls_values = self.process({'observations_raw': self._controls_values})[
-            'observations_raw'
-        ]
+        self._new_controls_values = self.process(
+            Context(observations_raw=self._controls_values)
+        ).observations_raw
+
         self._new_autofluorescence = utils.estimate_autofluorescence(
             self._new_controls_values, self._controls_masks
         )
@@ -642,15 +634,24 @@ class Colinearization(Task):
         self._log.debug(f"Linearization initialization done in {time.time() - t0:.1f}s")
         self._log.debug(f"newcontrols_values shape: {self._new_controls_values.shape}")
 
-
         return Context(
-                controls_values=self._new_controls_values,
-                autofluorescence=self._new_autofluorescence,
-                saturation_thresholds=self._new_saturation_thresholds,
-                linearization_path=self._linearization_path,
-                linearization_params=self.params,
-                colinearizer=self,
-            )
+            controls_values=self._new_controls_values,
+            autofluorescence=self._new_autofluorescence,
+            saturation_thresholds=self._new_saturation_thresholds,
+            linearization_path=self._linearization_path,
+            linearization_params=self.params,
+            colinearizer=self,
+        )
+
+
+    # def process(self, ctx):
+        # observations_raw = self.get_ctx(ctx, 'observations_raw')
+        # assert self.params is not None, "You need to run initialize() first"
+        # self._log.debug(f"Linearizing observations of shape {observations_raw.shape}")
+        # x = self.compute_yprime_from_list(observations_raw.T).T
+        # self._log.debug(f"Linearization done, output shape: {x.shape}")
+        # return {'observations_raw': x}
+
 
     @partial(jit, static_argnums=(0,))
     def _generate_single_identity_transform(self, xbounds):
@@ -705,13 +706,7 @@ class Colinearization(Task):
 
         return [DiagnosticFigure(fig, '')]
 
-    def process(self, ctx):
-        observations_raw = self.get_ctx(ctx, 'observations_raw')
-        assert self.params is not None, "You need to run initialize() first"
-        self._log.debug(f"Linearizing observations of shape {observations_raw.shape}")
-        x = self.compute_yprime_from_list(observations_raw.T).T
-        self._log.debug(f"Linearization done, output shape: {x.shape}")
-        return {'observations_raw': x}
+
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}

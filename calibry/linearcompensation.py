@@ -43,7 +43,7 @@ abundances = linpipe.apply(observations)
 
 from jaxopt import GaussNewton
 from .pipeline import Task, DiagnosticFigure
-from .utils import Context
+from .utils import Context, Escaped
 import jax
 from jax import jit, vmap
 import jax.numpy as jnp
@@ -76,14 +76,13 @@ class LinearCompensation(Task):
 
     mode: str = 'WLR'
     use_matrix: Optional[np.ndarray] = None
-    matrix_corrections: Optional[Dict[Tuple[str, str], float]] = None
+    matrix_corrections: Optional[Escaped[Dict[str, Escaped[Dict[str, float]]]]] = None
     use_inverse_variance_estimate_weights: bool = True
     variance_weight_cutoff: float = 100
     channel_weight_attenuation_power: float = 2.0
     unmix_controls: bool = True
 
     def initialize(self, ctx: Context):
-
         self._saturation_thresholds = ctx.saturation_thresholds
         self._controls_values = ctx.controls_values
         self._controls_masks = ctx.controls_masks
@@ -112,16 +111,19 @@ class LinearCompensation(Task):
 
         self._spillover_matrix = np.array(self._spillover_matrix)
 
+        # new version for Dict[str, Dict[str, float]]
         if self.matrix_corrections is not None:
-            for (p, c), v in self.matrix_corrections.items():
+            for p, corrections in self.matrix_corrections.items():
                 i = self._protein_names.index(p)
-                j = self._channel_names.index(c)
-                prev_value = self._spillover_matrix[i, j]
-                self._spillover_matrix[i, j] *= v
-                self._log.debug(
-                    f"""Correcting spillover matrix for ({p}, {c}):
-                    matrix[{i}, {j}] *= {v} (prev value: {prev_value})"""
-                )
+                for c, v in corrections.items():
+                    j = self._channel_names.index(c)
+                    prev_value = self._spillover_matrix[i, j]
+                    self._spillover_matrix[i, j] *= v
+                    self._log.debug(
+                        f"""Correcting spillover matrix for ({p}, {c}):
+                        matrix[{i}, {j}] *= {v} (prev value: {prev_value})"""
+                    )
+
 
         self._channel_weights = self.compute_channel_weights(
             ctx.controls_values, ctx.controls_masks
@@ -143,7 +145,6 @@ class LinearCompensation(Task):
         )
 
     def process(self, ctx: Context):
-
         observations_raw: np.ndarray = ctx.observations_raw
         channel_names: List = ctx.channel_names
 
@@ -217,8 +218,7 @@ class LinearCompensation(Task):
         self,
         ctx: Context,
         **kw,
-    )-> Optional[List[DiagnosticFigure]]:
-
+    ) -> Optional[List[DiagnosticFigure]]:
         assert self._spillover_matrix is not None, "Spillover matrix not computed"
         assert self._autofluorescence is not None, "Autofluorescence not computed"
 
@@ -244,6 +244,7 @@ class LinearCompensation(Task):
             ctx.protein_names,
             ctx.channel_names,
             decription='linear model, ',
+            autofluorescence=self._autofluorescence,
             std_models=std_models,
             **kw,
         )
@@ -314,7 +315,6 @@ class LinearCompensation(Task):
         max_points=100000,
         logger=None,
     ):
-
         # Spectral signature estimation using Weighted Linear Regression (WLR) method.
 
         # Returns:

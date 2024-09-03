@@ -27,6 +27,7 @@ from .utils import Context, LoadedData
 
 from dracon.utils import DictLike
 from dracon.loader import LoadedConfig
+import logging
 
 from pydantic import Field
 
@@ -37,7 +38,7 @@ class MEFBeadsTransform(Task):
     """
 
     beads_data: LoadedData
-    channel_units: LoadedConfig[Escaped[DictLike]] = (
+    channel_units: LoadedConfig[Escaped[DictLike[str, str]]] = (
         'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
     )
     beads_mef_values: LoadedConfig[Escaped[DictLike[str, List[float]]]] = (
@@ -74,10 +75,11 @@ class MEFBeadsTransform(Task):
             compression=self.log_poly_scale,
             base=10,
         )
+        self._log = logging.getLogger(__name__)
 
     def initialize(self, ctx: Context):
         if self.use_channels is None:
-            self.use_channels = ctx.channel_names
+            self.use_channels = []
 
         remove_chans = []
 
@@ -105,6 +107,8 @@ class MEFBeadsTransform(Task):
             chans_from_unit = set(list(self.channel_units.keys()))
             chans_from_data = set(list(self.beads_data.columns))
             all_chans = list(chans_from_unit.intersection(chans_from_data))
+            self.use_channels = all_chans
+
 
         self._beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
 
@@ -165,7 +169,9 @@ class MEFBeadsTransform(Task):
                 raise ValueError(f'Channel {c} not found in beads\' use_channels. Cannot calibrate')
         new_values = self.transform_channels_to_MEF(cells.values, actual_columns)
         cells = pd.DataFrame(new_values, columns=actual_columns)
-        print(f"LOADER--mefbeadstransform: Loaded {len(cells)} cells with {len(cells.columns)} MEF units channels")
+        print(
+            f"LOADER--mefbeadstransform: Loaded {len(cells)} cells with {len(cells.columns)} MEF units channels"
+        )
         return cells
 
     def make_loader(self, current_loader: Callable):

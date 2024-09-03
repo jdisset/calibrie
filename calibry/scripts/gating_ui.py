@@ -102,13 +102,14 @@ def detailed_diagnostics():
 
     dpg.show_item('loading-detailed-diagnostics')
 
-    fig = gating_task.diagnostics(
+    dfig = gating_task.diagnostics(
         None,
         use_files=[f.path for f in gating_files.files],
         figsize=(IMSIZE / dpi, IMSIZE / dpi),
         dpi=dpi,
     )
 
+    fig = dfig[0].figure
     fig.tight_layout(pad=0)
     fig.canvas.draw()
 
