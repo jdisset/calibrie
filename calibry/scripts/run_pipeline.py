@@ -47,11 +47,6 @@ def run_and_save_diagnostics(pipeline, outputdir):
     outputdir = Path(outputdir).expanduser().resolve()
     outputdir.mkdir(parents=True, exist_ok=True)
 
-    pipeline_dump = dr.dump(pipeline)
-
-    with open(outputdir / 'full_calibration_pipeline.yaml', 'w') as f:
-        f.write(pipeline_dump)
-
     for fig in figs:
         fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
         fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300)
@@ -158,6 +153,10 @@ class CalibrationProgram(LazyDraconModel):
                 if not s['control']:
                     print(f"Processing sample {s['name']}")
                     self.calibrate_file(s)
+            # save the full pipeline
+            pipeline_dump = dr.dump(self._resolved_pipeline)
+            with open(self._outputdir / 'calibration.yaml', 'w') as f:
+                f.write(pipeline_dump)
 
 
 def main():
@@ -166,7 +165,6 @@ def main():
         name='calibry-run',
         description='Calibration of data files and experiments.',
     )
-
     calib, args = prog.parse_args(sys.argv[1:])
     calib.run()
 
