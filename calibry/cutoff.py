@@ -14,26 +14,21 @@ from .utils import Context, add_calibration_metadata
 
 
 class AbundanceCutoff(Task):
-
     cutoffs: Dict[str, float] = {}
     affects_controls: bool = False
 
     def initialize(self, ctx: Context):
         if self.affects_controls:
             r = self.process(
-                Context(
-                    protein_names=ctx.protein_names,
-                    abundances_AU=ctx.controls_abundances_AU
-                )
+                Context(protein_names=ctx.protein_names, abundances_AU=ctx.controls_abundances_AU)
             )
             controls_abundances_AU = r.abundances_AU
-            self.deleted = r.deleted
-            new_controls_masks = ctx.controls_masks[~self.deleted]
-            new_controls_values = ctx.controls_values[~self.deleted]
+            new_controls_masks = ctx.controls_masks[~r.deleted]
+            new_controls_values = ctx.controls_values[~r.deleted]
             return Context(
                 controls_abundances_AU=controls_abundances_AU,
                 controls_masks=new_controls_masks,
-                controls_values=new_controls_values
+                controls_values=new_controls_values,
             )
         else:
             return Context()
