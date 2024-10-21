@@ -109,7 +109,7 @@ def detailed_diagnostics():
         dpi=dpi,
     )
 
-    fig = dfig[0].figure
+    fig = dfig[0].fig
     fig.tight_layout(pad=0)
     fig.canvas.draw()
 
