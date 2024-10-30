@@ -1,7 +1,8 @@
 import dracon as dr
 import json
 from dracon.utils import with_indent
-from dracon.interpolation import LazyDraconModel
+from dracon.deferred import DeferredNode
+from dracon.lazy import LazyDraconModel, resolve_all_lazy
 import pandas as pd
 import time
 from dracon.resolvable import Resolvable
@@ -54,19 +55,18 @@ def run_and_save_diagnostics(pipeline, outputdir):
 
 class CalibrationProgram(LazyDraconModel):
     pipeline: Annotated[
-        Resolvable[cal.Pipeline], Arg(help='The pipeline to execute', resolvable=True, is_file=True)
+        DeferredNode[cal.Pipeline], Arg(help='The pipeline to execute', is_file=True)
     ]
     xpfile: Annotated[str, Arg(help='Input experiment file to load')] = './experiment.json5'
-    outputdir: Annotated[
-        Resolvable[str],
-        Arg(
-            help='The output directory. If left empty, defaults to ${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}',
-            resolvable=True,
-        ),
-    ] = '${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}'
+
+    outputdir: Annotated[DeferredNode[str], Arg(help='Output directory')] = (
+        '${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}'
+    )
+
     datapath: Annotated[
         str, Arg(help='The path to the directory containing the data files, relative to the xpfile')
     ] = './data/raw_data/'
+
     diagnostics: Annotated[bool, Arg(help='Whether to generate diagnostic figures')] = True
     diagnostics_output_dir: Annotated[
         Optional[str], Arg(help='The directory to save diagnostic figures to')
@@ -98,11 +98,14 @@ class CalibrationProgram(LazyDraconModel):
         self._context['$XP_DIRNAME'] = Path(self.xpfile).parent.name
         self._context['$XP_DATADIR'] = self._datadir.as_posix()
 
-        self._resolved_pipeline = self.pipeline.resolve(context=self._context, interpolate_all=True)
+        self._resolved_pipeline = self.pipeline.construct(context=self._context)
+        resolve_all_lazy(self._resolved_pipeline)
 
         self._context['$PIPELINE_NAME'] = self._resolved_pipeline.get_namehash()
 
-        self._outputdir = self.outputdir.resolve(context=self._context, interpolate_all=True)
+        self._outputdir = self.outputdir.construct(context=self._context)
+        resolve_all_lazy(self._outputdir)
+
         self._outputdir = Path(self._outputdir).expanduser().resolve()
 
         self._outputdir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +168,13 @@ def main():
         name='calibry-run',
         description='Calibration of data files and experiments.',
     )
-    calib, args = prog.parse_args(sys.argv[1:])
+    calib, args = prog.parse_args(
+        sys.argv[1:],
+        deferred_paths=[
+            '/pipeline',
+            '/outputdir',
+        ],
+    )
     calib.run()
 
 
