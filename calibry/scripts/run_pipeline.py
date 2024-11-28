@@ -57,6 +57,7 @@ class CalibrationProgram(LazyDraconModel):
     pipeline: Annotated[
         DeferredNode[cal.Pipeline], Arg(help='The pipeline to execute', is_file=True)
     ]
+
     xpfile: Annotated[str, Arg(help='Input experiment file to load')] = './experiment.json5'
 
     outputdir: Annotated[DeferredNode[str], Arg(help='Output directory')] = (
@@ -100,12 +101,12 @@ class CalibrationProgram(LazyDraconModel):
 
         self._resolved_pipeline = self.pipeline.construct(context=self._context)
         resolve_all_lazy(self._resolved_pipeline)
+        if not isinstance(self._resolved_pipeline, cal.Pipeline):
+            self._resolved_pipeline = cal.Pipeline(**self._resolved_pipeline)
 
         self._context['$PIPELINE_NAME'] = self._resolved_pipeline.get_namehash()
 
-        self._outputdir = self.outputdir.construct(context=self._context)
-        resolve_all_lazy(self._outputdir)
-
+        self._outputdir = self.outputdir.construct(context=self._context).resolve()
         self._outputdir = Path(self._outputdir).expanduser().resolve()
 
         self._outputdir.mkdir(parents=True, exist_ok=True)
@@ -170,6 +171,18 @@ def main():
     )
     calib, args = prog.parse_args(
         sys.argv[1:],
+        context={
+            'GatingTask': GatingTask,
+            'PolygonGate': PolygonGate,
+            'LoadControls': LoadControls,
+            'LinearCompensation': LinearCompensation,
+            'ProteinMapping': ProteinMapping,
+            'MEFBeadsCalibration': MEFBeadsCalibration,
+            'MEFBeadsTransform': MEFBeadsTransform,
+            'PandasExport': PandasExport,
+            'AbundanceCutoff': AbundanceCutoff,
+            'Pipeline': Pipeline,
+        },
         deferred_paths=[
             '/pipeline',
             '/outputdir',
