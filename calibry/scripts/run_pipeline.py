@@ -25,6 +25,7 @@ from calibry import (
     MEFBeadsCalibration,
     MEFBeadsTransform,
     PandasExport,
+    Colinearization,
     AbundanceCutoff,
     Pipeline,
 )
@@ -50,7 +51,7 @@ def run_and_save_diagnostics(pipeline, outputdir):
 
     for fig in figs:
         fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
-        fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300)
+        fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300, bbox_inches='tight')
 
 
 class CalibrationProgram(LazyDraconModel):
@@ -173,6 +174,7 @@ def main():
         sys.argv[1:],
         context={
             'GatingTask': GatingTask,
+            'Colinearization': Colinearization,
             'PolygonGate': PolygonGate,
             'LoadControls': LoadControls,
             'LinearCompensation': LinearCompensation,

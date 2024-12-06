@@ -582,7 +582,7 @@ def powers_of_ten(xmin, xmax, skip10=False):
 
 def make_symlog_ax(ax, xlims, ylims, linthresh=200, linscale=0.5, skip10=True, margins=0.05):
     """
-    Set the axis to a custom symlog-like scale, with the given limits and margins. 
+    Set the axis to a custom symlog-like scale, with the given limits and margins.
     Returns the transformation function, the inverse transformation function, the transformed xlims and the transformed ylims.
     Args:
             ax (matplotlib.axis): the axis to modify
@@ -821,7 +821,7 @@ def range_plots(
 ):
     from matplotlib.patches import Circle
 
-    base_size = 1.0
+    base_size = 2.0
     range_size = 0.4
     nchannels = len(channel_names)
     nproteins = len(protein_names)

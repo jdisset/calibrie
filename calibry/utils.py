@@ -500,7 +500,6 @@ def cubic_exp_inv(y, threshold, base, scale: float):
     return E - (F / (D * C)) + (C / (cb2 * D))
 
 
-
 def spline_biexponential(x, threshold: float = 100, base: int = 10, compression: float = 0.5):
     """
     bi-logarithm function with smooth transition to cubic polynomial between [-threshold, threshold]
@@ -540,9 +539,6 @@ def inverse_spline_biexponential(
         cubic_exp_inv(y, threshold, base=base, scale=compression),
     )
     return y * sign
-
-
-
 
 
 def logb_jax(x, base=10, **kwargs):
@@ -625,7 +621,6 @@ def inverse_spline_biexponential_jax(y, threshold=100, base=10, compression=1):
         cubic_exp_inv_jax(y, threshold, base=base, scale=compression),
     )
     return y * sign
-
 
 
 logtransform_jax = partial(spline_biexponential_jax, threshold=100, compression=0.8)
@@ -782,6 +777,7 @@ def add_calibration_metadata(df, task_name, metadata):
     if 'calibration_info' not in df.attrs:
         df.attrs['calibration_info'] = {}
     df.attrs['calibration_info'][task_name] = metadata
+
 
 def tree_stack(trees):
     # stack the leaves of a list of pytrees into a single pytree
@@ -947,8 +943,24 @@ def estimate_autofluorescence(controls_values, controls_masks):
     return np.median(controls_values[zero_masks], axis=0)
 
 
-def estimate_saturation_thresholds(controls_values, epsilon=1e-6):
+def estimate_saturation_thresholds_qtl(controls_values, epsilon=1e-5):
+    # shape of controls_values: (n_observations, n_channels)
+    # here controls_values contains all cell observations, whether they are single_color controls, or all-color controls, or blank
     return np.quantile(controls_values, [0.0001, 0.9999], axis=0).T + np.array([epsilon, -epsilon])
+
+
+def estimate_saturation_thresholds(controls_values, epsilon=1e-5):
+    # shape of controls_values: (n_observations, n_channels)
+    # per-channel quantiles
+    th = np.quantile(controls_values, [0.0001, 0.9999], axis=0).T + np.array([epsilon, -epsilon])
+
+    global_min = np.min(th[:, 0])  # minimum of lower thresholds
+    global_max = np.max(th[:, 1])  # maximum of upper thresholds
+
+    n_channels = th.shape[0]
+    consistent_th = np.tile([global_min, global_max], (n_channels, 1))
+
+    return consistent_th
 
 
 ##────────────────────────────────────────────────────────────────────────────}}}
