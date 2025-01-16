@@ -129,14 +129,23 @@ class Pipeline(ArbitraryModel):
             task_kwargs.update(kw)
             print(f"Generating diagnostics for {task._name} with kwargs {task_kwargs}")
             self._log.debug(f"Generating diagnostics for {task._name}")
-            figs = task.diagnostics(self._context, **task_kwargs)
-            istr = str(i).zfill(2)
-            if figs:
-                if isinstance(figs, list):
-                    for fig in figs:
-                        fig.source_task = f'{istr}_{task._name}'
-                    all_figs.extend(figs)
-                else:
-                    figs.source_task = f'{istr}_{task._name}'
-                    all_figs.append(figs)
+            try:
+                figs = task.diagnostics(self._context, **task_kwargs)
+                istr = str(i).zfill(2)
+                if figs:
+                    if isinstance(figs, list):
+                        for fig in figs:
+                            fig.source_task = f'{istr}_{task._name}'
+                        all_figs.extend(figs)
+                    else:
+                        figs.source_task = f'{istr}_{task._name}'
+                        all_figs.append(figs)
+            except Exception as e:
+                self._log.error(
+                    f"Error generating diagnostics for task {task._name}: {e}. Skipping"
+                )
+                import traceback
+
+                traceback.print_exc()
+
         return all_figs

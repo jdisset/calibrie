@@ -10,6 +10,7 @@ import numpy as np
 import jax.numpy as jnp
 from . import plots, utils
 from matplotlib import pyplot as plt
+import logging
 
 _VALID_BLANK_NAMES = ['BLANK', 'EMPTY', 'INERT', 'CNTL']
 _VALID_ALL_NAMES = ['ALL', 'ALLCOLOR', 'ALLCOLORS', 'FULL']
@@ -28,88 +29,112 @@ def normalized_metrics(scores):
 
 
 class ChannelMetrics:
-    """Helper class to compute and store channel quality metrics."""
+    """Helper class to compute and store channel quality metrics with validation."""
 
-    def __init__(self, values, masks, channel_names, protein_names):
+    # Validation thresholds
+    BLANK_MIN_EVENTS = 1000  # Minimum number of blank control events
+    SIGNAL_WARNING_THRESHOLD = -0.25  # Only warn if signal z-score is significantly negative
+    SNR_WARNING_THRESHOLD = 0.5  # Warn about very low SNR that could indicate problems
+    BLANK_CV_WARNING = 20.0  # Coefficient of variation threshold for blank controls
+    MACHINE_MAX = 2**18  # Typical max value for most cytometers, used for range calculations
+
+    def __init__(self, values, masks, channel_names, protein_names, validation_warnings=True):
         self.values = values
         self.masks = masks
         self.channel_names = channel_names
         self.protein_names = protein_names
+        self.validation_warnings = validation_warnings
+        self._log = logging.getLogger(__name__)
 
-        # compute basic masks once
+        # Pre-compute basic masks and stats
         self.single_masks = masks.sum(axis=1) == 1
         self.blank_mask = np.logical_not(np.any(masks, axis=1))
         self.blank_values = values[self.blank_mask]
 
-        # pre-compute blank stats
+        # Pre-compute blank statistics
         self.blank_mean = np.mean(self.blank_values, axis=0)
         self.blank_std = np.std(self.blank_values, axis=0)
 
-        # store computed metrics
-        self.correlations = {}
+        # Validate blank controls (only critical issues)
+        self._validate_blank_controls()
+
+        # Initialize metric storage
         self.signal_strengths = {}
         self.signal_to_noise = {}
-        self.dynamic_ranges = {}
         self.specificities = {}
-        self.crosstalks = {}  # added crosstalk storage
+        self.crosstalks = {}
+        self.correlations = {}
+        self.dynamic_ranges = {}
 
         self._compute_metrics()
+
+    def _validate_blank_controls(self):
+        if len(self.blank_values) < self.BLANK_MIN_EVENTS:
+            self._log.warning(
+                f"Very few blank control events ({len(self.blank_values)} < {self.BLANK_MIN_EVENTS})"
+            )
+
+    def _compute_single_protein_metrics(self, pid, prot, prot_values, other_values=None):
+        """Compute all metrics for a single protein."""
+        # Store correlation matrix
+        self.correlations[prot] = np.corrcoef(prot_values.T)
+        self.signal_strengths[prot] = {}
+        self.signal_to_noise[prot] = {}
+        self.specificities[prot] = {}
+        self.crosstalks[prot] = {}
+        self.dynamic_ranges[prot] = {}
+
+        for cid, chan in enumerate(self.channel_names):
+            # Signal strength (z-score relative to blank)
+            mean_signal = np.mean(prot_values[:, cid])
+            signal = (mean_signal - self.blank_mean[cid]) / self.blank_std[cid]
+
+            if signal < self.SIGNAL_WARNING_THRESHOLD and self.validation_warnings:
+                self._log.warning(f"Negative signal for {prot} in {chan}: {signal:.2f} z-scores")
+
+            if other_values is not None:
+                max_other_signal = np.max(np.abs(other_values[:, cid] - self.blank_mean[cid]))
+                crosstalk = max_other_signal / self.blank_std[cid]
+            else:
+                crosstalk = 0
+
+            snr = np.std(prot_values[:, cid]) / self.blank_std[cid]
+
+            pct_range = np.percentile(prot_values[:, cid], [1, 99])
+            dyn_range = np.log10(pct_range[1] - pct_range[0])
+
+            self.signal_strengths[prot][chan] = signal
+            self.signal_to_noise[prot][chan] = snr
+            self.specificities[prot][chan] = np.maximum(signal / (crosstalk + EPSILON), 0)
+            self.crosstalks[prot][chan] = crosstalk
+            self.dynamic_ranges[prot][chan] = dyn_range
+
+            if (
+                snr < self.SNR_WARNING_THRESHOLD
+                and signal > 1.0  # Only if we expect signal
+                and self.validation_warnings
+            ):
+                self._log.warning(f"Very low SNR for {prot} in {chan}: {snr:.2f}")
 
     def _compute_metrics(self):
         """Compute all quality metrics for all channels."""
         for pid, prot in enumerate(self.protein_names):
-            # get protein-specific masks and values
+            # Get protein-specific masks
             prot_mask = np.logical_and(self.single_masks, self.masks[:, pid])
             if not np.any(prot_mask):
+                self._log.warning(f"No single-color control events for {prot}")
                 continue
 
             prot_values = self.values[prot_mask]
 
-            # compute other proteins mask
+            # Get other proteins' data
             not_pid_mask = np.logical_not(self.masks[:, pid])
             other_mask = np.logical_and(
                 self.single_masks, np.logical_and(not_pid_mask, np.logical_not(self.blank_mask))
             )
             other_values = self.values[other_mask] if np.any(other_mask) else None
 
-            # store correlation matrix
-            self.correlations[prot] = np.corrcoef(prot_values.T)
-
-            # initialize metric dictionaries for this protein
-            self.signal_strengths[prot] = {}
-            self.signal_to_noise[prot] = {}
-            self.dynamic_ranges[prot] = {}
-            self.specificities[prot] = {}
-            self.crosstalks[prot] = {}  # added crosstalk dict
-
-            # compute per-channel metrics
-            for cid, chan in enumerate(self.channel_names):
-                # signal strength (z-score)
-                signal = (np.mean(prot_values[:, cid]) - self.blank_mean[cid]) / self.blank_std[cid]
-
-                # cross-talk
-                if other_values is not None:
-                    crosstalk = (
-                        np.max(np.abs(other_values[:, cid] - self.blank_mean[cid]))
-                        / self.blank_std[cid]
-                    )
-                else:
-                    crosstalk = 0
-
-                # snr
-                snr = np.std(prot_values[:, cid]) / self.blank_std[cid]
-
-                # dynamic range
-                dyn_range = np.log10(
-                    np.quantile(prot_values[:, cid], 0.99) - np.quantile(prot_values[:, cid], 0.01)
-                )
-
-                # store all metrics
-                self.signal_strengths[prot][chan] = signal
-                self.signal_to_noise[prot][chan] = snr
-                self.dynamic_ranges[prot][chan] = dyn_range
-                self.specificities[prot][chan] = signal / (crosstalk + EPSILON)
-                self.crosstalks[prot][chan] = crosstalk  # store crosstalk
+            self._compute_single_protein_metrics(pid, prot, prot_values, other_values)
 
     def get_all_metrics(self):
         """Return all metrics in a format suitable for plotting."""
@@ -131,6 +156,28 @@ class ChannelMetrics:
                     }
                 )
         return metrics
+
+    def get_quality_summary(self, protein: str, channel: str = None) -> dict:
+        """Get quality metrics summary for a protein or protein-channel pair."""
+        if protein not in self.protein_names:
+            return {}
+
+        if channel is not None:
+            if channel not in self.channel_names:
+                return {}
+            return {
+                'signal': self.signal_strengths[protein][channel],
+                'snr': self.signal_to_noise[protein][channel],
+                'specificity': self.specificities[protein][channel],
+                'crosstalk': self.crosstalks[protein][channel],
+                'dynamic_range': self.dynamic_ranges[protein][channel],
+            }
+
+        return {
+            chan: self.get_quality_summary(protein, chan)
+            for chan in self.channel_names
+            if chan in self.signal_strengths[protein]
+        }
 
 
 class LoadControls(Task):
@@ -329,6 +376,8 @@ class LoadControls(Task):
         self._log.debug(f"Loaded {self._controls_values.shape[0]} events")
 
         self._saturarion_thresholds = utils.estimate_saturation_thresholds(self._controls_values)
+        print(f'saturation thresholds: {self._saturarion_thresholds}')
+
         self._log.debug(f"Saturation thresholds: {self._saturarion_thresholds}")
 
         self._reference_channels = self.pick_reference_channels()

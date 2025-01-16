@@ -86,6 +86,15 @@ class LinearCompensation(Task):
                 Context(observations_raw=self._controls_values, channel_names=self._channel_names)
             ).abundances_AU
 
+        # logdebug most things:
+        self._log.debug(f"Protein names: {self._protein_names}")
+        self._log.debug(f"Channel names: {self._channel_names}")
+        self._log.debug(f"Reference channels: {self._reference_channels}")
+        self._log.debug(f"Autofluorescence: {self._autofluorescence}")
+        self._log.debug(f"Spillover matrix:\n{self._spillover_matrix}")
+        self._log.debug(f"Channel weights: {self._channel_weights}")
+        self._log.debug(f"Controls abundance AU: {self._controls_abundance_AU}")
+
         return Context(
             autofluorescence=self._autofluorescence,
             spillover_matrix=self._spillover_matrix,
@@ -97,23 +106,30 @@ class LinearCompensation(Task):
     def _compute_channel_weights(self) -> np.ndarray:
         """compute channel weights using quality metrics"""
         weights = np.ones(len(self._channel_names))
+        self._log.debug("Computing channel weights using quality metrics")
 
         for i, chan in enumerate(self._channel_names):
             # combine SNR and specificity for each protein that uses this channel
             chan_weights = []
             for prot in self._protein_names:
+                self._log.debug(f"Protein {prot}:")
                 if chan in self._signal_to_noise[prot]:
+                    self._log.debug(f"   Channel {chan}:")
                     snr = self._signal_to_noise[prot][chan]
-                    spec = self._specificities[prot][chan]
+                    spec = np.maximum(self._specificities[prot][chan], 0)
+                    self._log.debug(f"   SNR={snr}, specificity={spec}")
                     # use geometric mean of SNR and specificity
                     chan_weights.append(np.sqrt(snr * spec))
+                    self._log.debug(f"    Weight: {chan_weights[-1]}")
 
             if chan_weights:
                 # use max weight across proteins
                 weights[i] = np.max(chan_weights)
+                self._log.debug(f"Max weight: {weights[i]}")
 
         w = weights / np.max(weights)  # normalize
-        return w**self.channel_weight_attenuation_power
+        W = w**self.channel_weight_attenuation_power
+        return W
 
     def _compute_spillover_matrix(self) -> np.ndarray:
         """compute spillover matrix using weighted least squares"""

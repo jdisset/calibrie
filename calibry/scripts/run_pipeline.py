@@ -31,6 +31,9 @@ from calibry import (
 )
 import dracon as dr
 import matplotlib
+import logging
+
+log = logging.getLogger(__name__)
 
 matplotlib.use('Agg')
 
@@ -50,8 +53,14 @@ def run_and_save_diagnostics(pipeline, outputdir):
     outputdir.mkdir(parents=True, exist_ok=True)
 
     for fig in figs:
-        fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
-        fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300, bbox_inches='tight')
+        try:
+            fname = f'{fig.source_task}_{fig.name}'.lower().replace(' ', '_')
+            fig.fig.savefig(outputdir / f'{fname}.pdf', dpi=300, bbox_inches='tight')
+        except Exception as e:
+            log.error(f'Error saving figure {fig.name}: {e}. Skipping.')
+            import traceback
+
+            traceback.print_exc()
 
 
 class CalibrationProgram(LazyDraconModel):
