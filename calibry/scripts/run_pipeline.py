@@ -161,16 +161,17 @@ class CalibrationProgram(LazyDraconModel):
                 )
             run_and_save_diagnostics(self._resolved_pipeline, diag_output_dir.as_posix())
 
+        # save the full pipeline
+        pipeline_dump = dr.dump(self._resolved_pipeline)
+        with open(self._outputdir / 'calibration.yaml', 'w') as f:
+            f.write(pipeline_dump)
+
         if not self.diagnostics_only:
             samples = self._xpdata['samples']
             for s in samples:
                 if not s['control']:
                     print(f"Processing sample {s['name']}")
                     self.calibrate_file(s)
-            # save the full pipeline
-            pipeline_dump = dr.dump(self._resolved_pipeline)
-            with open(self._outputdir / 'calibration.yaml', 'w') as f:
-                f.write(pipeline_dump)
 
 
 def main():
