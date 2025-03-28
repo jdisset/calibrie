@@ -801,7 +801,14 @@ class DataFile(Component):
 
 def add_new_file(list_manager, *args, **kwargs):
     files = xdialog.open_file("Title Here", filetypes=[], multiple=True)
-    loaded_files = [DataFile(path=f) for f in files]
+
+    loaded_files = []
+    for f in files:
+        try:
+            df = DataFile(path=f)
+            loaded_files.append(df)
+        except Exception as e:
+            print(f"Failed to load {f}: {e}")
 
     for file in loaded_files:
         list_manager.append(file)
