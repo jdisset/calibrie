@@ -14,7 +14,11 @@ import xdialog
 import calibry
 import calibry.utils
 from calibry.pipeline import Task, DiagnosticFigure
-from calibry.utils import spline_biexponential, inverse_spline_biexponential, add_calibration_metadata
+from calibry.utils import (
+    spline_biexponential,
+    inverse_spline_biexponential,
+    add_calibration_metadata,
+)
 from pydantic import BaseModel, Field, ConfigDict
 from numpy.typing import NDArray
 import numpy as np
@@ -731,10 +735,7 @@ class DistributionPlot(Component):
                     dpg.mvPlotCol_PlotBg, [0, 0, 0, 100], category=dpg.mvThemeCat_Plots
                 )
                 dpg.add_theme_color(
-                    dpg.mvPlotCol_XAxisGrid, [255, 255, 255, 50], category=dpg.mvThemeCat_Plots
-                )
-                dpg.add_theme_color(
-                    dpg.mvPlotCol_YAxisGrid, [255, 255, 255, 50], category=dpg.mvThemeCat_Plots
+                    dpg.mvPlotCol_PlotBorder, [0, 0, 0, 0], category=dpg.mvThemeCat_Plots
                 )
 
         dpg.bind_item_theme(self._plot, theme)
@@ -1073,17 +1074,23 @@ class GatingTask(Task, Component):
         df = self.apply_all_gates(df)
         n_rows = len(df)
 
-        add_calibration_metadata(df, self._name, {
-            'n_before_gating': prev_n_rows,
-            'n_after_gating': n_rows,
-        })
+        add_calibration_metadata(
+            df,
+            self._name,
+            {
+                'n_before_gating': prev_n_rows,
+                'n_after_gating': n_rows,
+            },
+        )
         print(f"LOADER--gating: Loaded {prev_n_rows} -> {n_rows} cells")
 
         if column_order is not None:
             try:
                 return df[column_order]
             except KeyError as e:
-                raise ValueError(f"When loading cells, asked for unknown column {e}. Available: {list(df.columns)}")
+                raise ValueError(
+                    f"When loading cells, asked for unknown column {e}. Available: {list(df.columns)}"
+                )
 
         return df
 
@@ -1103,7 +1110,6 @@ class GatingTask(Task, Component):
         dpi=200,
         **_,
     ) -> Any:
-
         if use_files is None:
             print("Using all color controls for gating diagnostics")
             all_data_df = pd.concat(ctx.raw_color_controls.values()).sample(frac=1)
