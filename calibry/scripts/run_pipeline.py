@@ -10,10 +10,9 @@ from dracon.commandline import Program, make_program, Arg
 import dracon
 import calibry as cal
 from pathlib import Path
-from typing import List, Tuple, Union, Annotated, Dict, Any, Optional
+from typing import List, Tuple, Union, Annotated, Dict, Any, Optional, Literal
 from pydantic import BaseModel
 import sys
-from pathlib import Path
 import json5
 from calibry.pipeline import DiagnosticFigure
 from calibry import (
@@ -78,6 +77,8 @@ class CalibrationProgram(LazyDraconModel):
         str, Arg(help='The path to the directory containing the data files, relative to the xpfile')
     ] = './data/raw_data/'
 
+    export_format: Annotated[Literal['csv', 'parquet'], Arg(help='Output file format')] = 'parquet'
+
     diagnostics: Annotated[bool, Arg(help='Whether to generate diagnostic figures')] = True
     diagnostics_output_dir: Annotated[
         Optional[str], Arg(help='The directory to save diagnostic figures to')
@@ -123,7 +124,7 @@ class CalibrationProgram(LazyDraconModel):
 
         return self._resolved_pipeline
 
-    def calibrate_file(self, sample):
+    def calibrate_file(self, sample, file_format='parquet'):
         data_path = (self._datadir / sample['file']).as_posix()
         ctx_out = self._resolved_pipeline.apply_all(data_path)
         data: pd.DataFrame = ctx_out.output_df
@@ -142,10 +143,16 @@ class CalibrationProgram(LazyDraconModel):
         data.attrs['xp'] = xp_dict
         data.attrs['sample'] = sample_dict
         self._outputdir.mkdir(parents=True, exist_ok=True)
-        output_path = self._outputdir / f'{sample["name"]}.parquet'
+        fname = f'{sample["name"]}.{file_format}'
+        output_path = self._outputdir / fname
         print(f'Saving calibrated data to {output_path}')
-        # data.to_parquet(output_path, compression='snappy')
-        data.to_parquet(output_path, compression='zstd')
+
+        if file_format == 'csv':
+            data.to_csv(output_path, index=False)
+        elif file_format == 'parquet':
+            data.to_parquet(output_path, compression='zstd')
+        else:
+            raise ValueError(f'Unsupported file format: {file_format}')
 
     def run(self):
         self.build_pipeline()
@@ -171,7 +178,7 @@ class CalibrationProgram(LazyDraconModel):
             for s in samples:
                 if not s['control']:
                     print(f"Processing sample {s['name']}")
-                    self.calibrate_file(s)
+                    self.calibrate_file(s, self.export_format)
 
 
 def main():
