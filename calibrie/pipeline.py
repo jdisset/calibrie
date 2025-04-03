@@ -1,6 +1,6 @@
 import logging
 from rich.logging import RichHandler
-from calibry.utils import ArbitraryModel, Context
+from calibrie.utils import ArbitraryModel, Context
 
 from typing import List, Dict, Any, Optional, Union
 from pydantic import Field, ConfigDict
@@ -63,7 +63,7 @@ class Pipeline(ArbitraryModel):
     def model_post_init(self, *args):
         super().model_post_init(*args)
         # set up logging
-        self._log = logging.getLogger('calibry')
+        self._log = logging.getLogger('calibrie')
         if self._log.hasHandlers():
             self._log.handlers.clear()
         logging_handler = RichHandler()

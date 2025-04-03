@@ -1,1 +1,1 @@
-::: calibry.linearcompensation
+::: calibrie.linearcompensation

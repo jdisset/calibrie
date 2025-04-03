@@ -1,35 +1,35 @@
-<img src="docs/logo_sd.png" alt="calibry logo" width="64">
+<img src="docs/logo_sd.png" alt="calibrie logo" width="64">
 
-# Calibry
+# Calibrie
 
-Calibry is a Python package for calibrating fluorescence values in flow cytometry data. 
+Calibrie is a Python package for calibrating fluorescence values in flow cytometry data. 
 It uses color controls, blank controls, and beads with known fluorescence values for calibration.
 
 ## Installation
 
-To install the Calibry package, follow these steps:
+To install the Calibrie package, follow these steps:
 
 ### For windows users
 If you don't have a python development environment, I'd suggest the following procedure:
 
 1. I recommend installing miniconda for windows: [Latest miniconda for windows 64 bits][https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe]
 2. Open the Anaconda Prompt (from the start menu)
-3. Create a new environment with python 3.8, as it's a version  that works for both cytoflow and calibry (calibry will work with any version >= 3.8) :
+3. Create a new environment with python 3.8, as it's a version  that works for both cytoflow and calibrie (calibrie will work with any version >= 3.8) :
    `conda create -n <name> python=3.8` where <name> is any name you want to give your environment (such as "flow")
 5. Activate the environment: `conda activate <name>`
 6. Install jupyterlab and git with `conda install jupyterlab git`
 7. Start jupyterlab with `jupyter lab` and open a terminal from the jupyterlab interface
-8. Clone and install calibry in the directory of your choice, from the jupyterlab terminal:
+8. Clone and install calibrie in the directory of your choice, from the jupyterlab terminal:
 	```bash
-	git clone <calibry_repository_url>`
-	cd calibry
+	git clone <calibrie_repository_url>`
+	cd calibrie
 	pip install jax[cpu] # this is needed to install all the jax dependencies
 	pip install -e .
 	```
-9. Clone and install the Calibry repository:
+9. Clone and install the Calibrie repository:
 	```bash
-	git clone <calibry_repository_url>`
-	cd calibry
+	git clone <calibrie_repository_url>`
+	cd calibrie
 	pip install -e .
 	```
 10. Windows require specific versions of certain packages so we'll install the dependencies manually:
@@ -42,14 +42,14 @@ If you don't have a python development environment, I'd suggest the following pr
 
 ### General procedure
 	```bash
-	git clone <calibry_repository_url>`
-	cd calibry
+	git clone <calibrie_repository_url>`
+	cd calibrie
 	pip install -e .
 	```
 
 ## Update
 
-To update the Calibry package to the latest version, first pull the latest changes from the GitHub repository:
+To update the Calibrie package to the latest version, first pull the latest changes from the GitHub repository:
 
 ```
 git pull
@@ -63,11 +63,11 @@ pip install --upgrade .
 
 ## Usage
 
-Here's an example of how to use the Calibration class from the Calibry package:
+Here's an example of how to use the Calibration class from the Calibrie package:
 
 ```python
 
-from calibry import Calibration
+from calibrie import Calibration
 import pandas as pd
 
 # Your control and beads files
@@ -105,7 +105,7 @@ calibrated = cal.apply(data)
 
 ## Calibration Class
 
-The Calibration class is the main class of the Calibry package. It handles the calibration of the fluorescence values in a given experiment and can export to a calibrated pandas dataframe.
+The Calibration class is the main class of the Calibrie package. It handles the calibration of the fluorescence values in a given experiment and can export to a calibrated pandas dataframe.
 
 ### Constructor Arguments
 - `color_controls_files`: A dictionary with keys as control protein names (e.g., 'eYFP') and values as paths to their corresponding FCS or CSV files.
@@ -120,4 +120,4 @@ The Calibration class is the main class of the Calibry package. It handles the c
 - `offset`: (Optional) An integer representing the offset to add to the fluorescence values to avoid negative values. The default value is FORTESSA_OFFSET.
 
 
-Please refer to the comments and documentation in the calibry.py file for more details.
+Please refer to the comments and documentation in the calibrie.py file for more details.

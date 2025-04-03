@@ -5,7 +5,7 @@ This module provides the LoadControls task, which loads single, multi and no-pro
 from .pipeline import Task, DiagnosticFigure
 from typing import List, Dict, Tuple, Optional
 from . import utils as ut
-from calibry.utils import LoadedData, Context
+from calibrie.utils import LoadedData, Context
 import numpy as np
 import jax.numpy as jnp
 from . import plots, utils

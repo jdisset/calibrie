@@ -35,7 +35,7 @@ from typing import Annotated
 
 import importlib.resources as pkg_resources
 
-config_path = Path(str(pkg_resources.files('calibry') / 'config'))
+config_path = Path(str(pkg_resources.files('calibrie') / 'config'))
 
 ## {{{                           --     types     --
 

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "calibry"
+name = "calibrie"
 version = "0.1.0a"
 description = "A set of tools and utils for fluorescence data calibration."
 authors = [{name = "Jean Disset", email = "jdisset@mit.edu"}]
@@ -28,5 +28,5 @@ dependencies = [
 ]
 
 [project.scripts]
-calibry-gating = "calibry.scripts.gating_ui:main"
-calibry-run = "calibry.scripts.run_pipeline:main"
+calibrie-gating = "calibrie.scripts.gating_ui:main"
+calibrie-run = "calibrie.scripts.run_pipeline:main"

@@ -1,6 +1,6 @@
 ## {{{                          --     import     --
 from typing import Annotated, List, Any, Optional, Callable
-from calibry.plots import CALIBRY_DEFAULT_DENSITY_CMAP, make_symlog_ax
+from calibrie.plots import CALIBRIE_DEFAULT_DENSITY_CMAP, make_symlog_ax
 import pandas as pd
 import copy
 import shapely.geometry as sg
@@ -11,10 +11,10 @@ import matplotlib.colors as mcolors
 import dearpygui.dearpygui as dpg
 from pathlib import Path
 import xdialog
-import calibry
-import calibry.utils
-from calibry.pipeline import Task, DiagnosticFigure
-from calibry.utils import (
+import calibrie
+import calibrie.utils
+from calibrie.pipeline import Task, DiagnosticFigure
+from calibrie.utils import (
     spline_biexponential,
     inverse_spline_biexponential,
     add_calibration_metadata,
@@ -22,7 +22,7 @@ from calibry.utils import (
 from pydantic import BaseModel, Field, ConfigDict
 from numpy.typing import NDArray
 import numpy as np
-from calibry.calibrygui import (
+from calibrie.calibriegui import (
     Component,
     make_ui_field,
     unique_tag,
@@ -763,7 +763,7 @@ class DataFile(Component):
 
     def load(self):
         global AVAILABLE_AXIS
-        df = calibry.utils.load_to_df(self.path)
+        df = calibrie.utils.load_to_df(self.path)
         assert isinstance(df, pd.DataFrame), f"Expected a DataFrame, got {type(df)}"
         self.df = df
 
@@ -1015,7 +1015,7 @@ def density_histogram2d(
 
     h = np.log10(h + 1).T
     if cmap is None:
-        cmap = CALIBRY_DEFAULT_DENSITY_CMAP
+        cmap = CALIBRIE_DEFAULT_DENSITY_CMAP
 
     # make colors < vmin transparent in the colormap
     cmap = copy.copy(cmap)
@@ -1076,7 +1076,7 @@ class GatingTask(Task, Component):
 
     def load_cells(self, data, column_order=None) -> Any:
         # first load with all columns, and apply the gates
-        df = calibry.utils.load_to_df(data)
+        df = calibrie.utils.load_to_df(data)
         prev_n_rows = len(df)
         df = self.apply_all_gates(df)
         n_rows = len(df)
@@ -1121,7 +1121,7 @@ class GatingTask(Task, Component):
             print("Using all color controls for gating diagnostics")
             all_data_df = pd.concat(ctx.raw_color_controls.values()).sample(frac=1)
         else:
-            all_data_df = pd.concat([calibry.utils.load_to_df(f) for f in use_files]).sample(frac=1)
+            all_data_df = pd.concat([calibrie.utils.load_to_df(f) for f in use_files]).sample(frac=1)
 
         df = get_resampled(all_data_df, resample_to)
 

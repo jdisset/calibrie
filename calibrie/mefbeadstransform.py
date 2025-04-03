@@ -1,6 +1,6 @@
 from jaxopt import GaussNewton
 import matplotlib.patches as patches
-from calibry.utils import Escaped
+from calibrie.utils import Escaped
 from .pipeline import Task, DiagnosticFigure
 from collections import defaultdict
 from copy import deepcopy
@@ -39,10 +39,10 @@ class MEFBeadsTransform(Task):
 
     beads_data: LoadedData
     channel_units: LoadedConfig[Escaped[DictLike[str, str]]] = (
-        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
+        'pkg:calibrie:config/beads/fortessa/spherotech_urcp-100-2H@channel_units'
     )
     beads_mef_values: LoadedConfig[Escaped[DictLike[str, List[float]]]] = (
-        'pkg:calibry:config/beads/fortessa/spherotech_urcp-100-2H@mef_values'
+        'pkg:calibrie:config/beads/fortessa/spherotech_urcp-100-2H@mef_values'
     )
     use_channels: Optional[Escaped[List[str]]] = None
     ignore_channels_with_missing_units: bool = False

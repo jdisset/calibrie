@@ -1,4 +1,4 @@
-::: calibry.pipeline
+::: calibrie.pipeline
 	options:
 		show_if_no_docstring: true
 		show_source: false

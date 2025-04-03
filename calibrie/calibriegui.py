@@ -3,10 +3,10 @@ import shapely.geometry as sg
 import dearpygui.dearpygui as dpg
 from pathlib import Path
 import xdialog
-import calibry
-import calibry.utils
+import calibrie
+import calibrie.utils
 import pandas as pd
-from calibry.pipeline import Task
+from calibrie.pipeline import Task
 import typing
 from typing import (
     Annotated,

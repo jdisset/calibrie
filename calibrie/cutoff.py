@@ -10,7 +10,7 @@ from functools import partial
 from . import plots, utils
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple
-from calibry.utils import Escaped
+from calibrie.utils import Escaped
 from .utils import Context, add_calibration_metadata
 
 

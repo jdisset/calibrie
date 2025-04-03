@@ -642,7 +642,7 @@ def make_density_cmap(name=None, alpha_start=1.0, alpha_end=1.0, base_cmap='Spec
     return density_cmap
 
 
-CALIBRY_DEFAULT_DENSITY_CMAP = make_density_cmap('calibry_density', alpha_start=1.0, alpha_end=1.0)
+CALIBRIE_DEFAULT_DENSITY_CMAP = make_density_cmap('calibrie_density', alpha_start=1.0, alpha_end=1.0)
 
 
 def density_histogram2d(
@@ -670,7 +670,7 @@ def density_histogram2d(
 
     h = np.log10(h + 1).T
     if cmap is None:
-        cmap = CALIBRY_DEFAULT_DENSITY_CMAP
+        cmap = CALIBRIE_DEFAULT_DENSITY_CMAP
 
     ax.imshow(
         h,

@@ -8,14 +8,14 @@ import time
 from dracon.resolvable import Resolvable
 from dracon.commandline import Program, make_program, Arg
 import dracon
-import calibry as cal
+import calibrie as cal
 from pathlib import Path
 from typing import List, Tuple, Union, Annotated, Dict, Any, Optional, Literal
 from pydantic import BaseModel
 import sys
 import json5
-from calibry.pipeline import DiagnosticFigure
-from calibry import (
+from calibrie.pipeline import DiagnosticFigure
+from calibrie import (
     GatingTask,
     PolygonGate,
     LoadControls,
@@ -184,7 +184,7 @@ class CalibrationProgram(LazyDraconModel):
 def main():
     prog = make_program(
         CalibrationProgram,
-        name='calibry-run',
+        name='calibrie-run',
         description='Calibration of data files and experiments.',
     )
     calib, args = prog.parse_args(

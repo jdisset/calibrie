@@ -1,3 +1,3 @@
 {{task_disclaimer}}
-::: calibry.linearcompensation
+::: calibrie.linearcompensation
 	handler: python

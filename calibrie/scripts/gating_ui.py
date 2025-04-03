@@ -1,7 +1,7 @@
 import xdialog
 import dearpygui.dearpygui as dpg
 import dracon as dr
-from calibry.gating import GatingTask, GatingFiles, PolygonGate
+from calibrie.gating import GatingTask, GatingFiles, PolygonGate
 import numpy as np
 import pandas as pd
 
@@ -131,7 +131,7 @@ def main():
     global gating_task, gating_files
 
     dpg.create_context()
-    dpg.create_viewport(title='Calibry Gating', width=START_WIDTH, height=START_HEIGHT)
+    dpg.create_viewport(title='Calibrie Gating', width=START_WIDTH, height=START_HEIGHT)
     dpg.setup_dearpygui()
     gating_task = GatingTask()
     gating_files = GatingFiles()
@@ -139,9 +139,9 @@ def main():
     gating_task._gating_files = gating_files
     gating_files._gating_task = gating_task
 
-    with dpg.window(tag='calibrygating', pos=(0, 0)):
+    with dpg.window(tag='calibriegating', pos=(0, 0)):
         # Theme setting
-        dpg.set_primary_window('calibrygating', True)
+        dpg.set_primary_window('calibriegating', True)
         with dpg.child_window(
             label="parameters",
             width=LEFT_PANEL_WIDTH,

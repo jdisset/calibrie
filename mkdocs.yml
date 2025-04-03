@@ -1,9 +1,9 @@
-site_name: "Calibry"
-repo_url: https://github.com/jdisset/calibry
+site_name: "Calibrie"
+repo_url: https://github.com/jdisset/calibrie
 
 theme:
   name: "material"
-  logo: assets/calibrylogo.png
+  logo: assets/calibrielogo.png
   palette:
     primary: white
   features:
@@ -14,7 +14,7 @@ theme:
     - navigation.top
 
 watch:
-  - calibry/
+  - calibrie/
 
 markdown_extensions:
   - admonition
