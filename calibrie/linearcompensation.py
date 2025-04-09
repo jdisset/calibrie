@@ -27,7 +27,6 @@ import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any, Optional
 from .pipeline import Task, DiagnosticFigure
 from .utils import Context, Escaped, generate_controls_dict
-import seaborn as sns
 from mpl_toolkits.axes_grid1 import make_axes_locatable, axes_size
 from . import plots, utils
 
@@ -324,14 +323,7 @@ class LinearCompensation(Task):
         # Show how weights affect different channels
         weighted_importance = self._spillover_matrix * self._channel_weights
 
-        # Plot heatmap of weight impact
-        sns.heatmap(
-            weighted_importance,
-            xticklabels=self._channel_names,
-            yticklabels=self._protein_names,
-            cmap='Greys',
-            ax=ax_impact,
-        )
+        im = ax_impact.imshow(weighted_importance, cmap='Greys', vmin=0, vmax=1)
         ax_impact.set_title('Weighted Channel Importance\n(Spillover × Weight)')
         ax_impact.set_xticklabels(self._channel_names, rotation=45, ha='right')
 
