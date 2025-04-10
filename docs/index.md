@@ -1,94 +1,100 @@
+
 <style>
   .md-typeset h1,
   .md-content__button {
-    display: none;
+    /* display: none; Hide default H1 title if using logo */
+  }
+  .md-typeset figure {
+    text-align: center;
   }
 </style>
 
-
-
 <figure markdown>
-   ![Calibrie Logo](./assets/calibrie.svg){width=200px}
+  ![Calibrie Logo](./assets/calibrie_full.png){ width="400" }
 </figure>
-**Calibrie** is a modular python library for the **analysis**, **unmixing**, and **calibration** of fluorescence flow cytometry data.
-	
-It implements multiple algorithms to turn fluorescence values into protein quantities, many diagnostics and quality assessment tools, and a number of
-plotting and analysis functions. It is designed to be extensible, and can be used as a library or as a standalone command line tool.
 
-!!! warning 
-	Calibrie is currently in **alpha**. It is usable, but the API is not yet stable, and there are still some rough edges.
-	
+**Calibrie** is a modular Python library for the **analysis**, **unmixing**, and **calibration** of fluorescence flow cytometry data, particularly tailored for synthetic biology applications.
+
+It implements multiple algorithms to turn raw fluorescence measurements into standardized, quantitative protein abundance units (like Molecules of Equivalent Fluorophore - MEF), along with numerous diagnostics and quality assessment tools. Calibrie is designed to promote **reproducible**, **modular**, and **sharable** cytometry analysis workflows.
+
+!!! warning "Alpha Stage"
+    Calibrie is currently in **alpha**. While functional, the API might undergo changes, and documentation is actively being developed. Feedback and contributions are welcome!
+
+## Core Philosophy
+
+Calibrie is built on a few key principles inspired by the need for robust characterization in synthetic biology:
+
+*   **Modularity:** Analysis steps are broken down into independent `Task` classes (like `LoadControls`, `LinearCompensation`, `MEFCalibration`). This allows flexible construction of analysis `Pipeline`s tailored to specific experimental needs.
+*   **Reproducibility:** By standardizing units (MEF-equivalents based on bead standards and protein mapping) and using explicit configuration files (YAML), Calibrie aims to make analyses repeatable across different datasets and even different labs (with caveats about instrument differences).
+*   **Transparency:** The `Context` object explicitly tracks the flow of data between `Tasks`. Extensive `diagnostics` methods within tasks allow visualization of intermediate steps and final results, aiding in quality control and debugging.
+*   **Flexibility:** Pipelines can be defined either directly in Python code for maximum control or through declarative YAML configuration files (leveraging the `dracon` library) for easier sharing and modification without code changes.
 
 ## Installation
 
-Calibrie is still, for now, internal to the Weiss lab only and is not yet available on PyPI. To install it, clone this repository and run
+Calibrie is not yet on PyPI. To install it, clone the repository and install it locally:
 
 ```bash
+git clone https://github.com/jdisset/calibrie.git
+cd calibrie
 pip install .
+# Or for development:
+# pip install -e .
 ```
+Make sure you have the necessary dependencies installed (see `pyproject.toml`). You might need to install JAX separately depending on your hardware (CPU/GPU/TPU): [JAX Installation Guide](https://github.com/google/jax#installation).
 
+## Quick Start
 
-## Usage
-
-Here is a simple example of how to use Calibrie to perform linear compensation.
-
+Here's a minimal example of defining and running a pipeline in Python:
 
 ```python
 import calibrie as cal
+import pandas as pd
 
-linpipe = cal.Pipeline(
-    [
-        cal.LoadControlsFromCSV("controls.csv"),
-        cal.LinearCompensation(),
-    ]
+# Define controls and bead file paths (replace with actual paths)
+controls_dict = {
+    'EBFP2': 'path/to/ebfp2_control.fcs',
+    'MNEONGREEN': 'path/to/mneongreen_control.fcs',
+    'ALL': 'path/to/all_control.fcs',
+    'BLANK': 'path/to/blank_control.fcs'
+}
+beads_file = 'path/to/beads.fcs'
+
+# Example minimal pipeline (adjust parameters as needed)
+pipeline = cal.Pipeline(
+    tasks={
+        "controls": cal.LoadControls(
+            color_controls=controls_dict,
+            use_channels=['PACIFIC_BLUE_A', 'FITC_A'] # Example
+        ),
+        "lincomp": cal.LinearCompensation(),
+        # Add ProteinMapping and MEFCalibration for full calibration
+    }
 )
 
-linpipe.initialize()
+# Initialize (e.g., load controls, compute spillover)
+# In a real scenario, LoadControls needs file paths.
+# Here we assume they are set correctly inside the task definition.
+pipeline.initialize()
 
-# to plot spillover matrix and single-protein compensation:
-linpipe.diagnostics("LinearCompensation")
+# Load sample data
+sample_data = cal.load_to_df("path/to/sample.fcs") # Use Calibrie's loader
 
-# ... after loading observations:
-abundances = linpipe.apply(observations)['abundances_AU']
+# Apply pipeline
+result_context = pipeline.apply_all(sample_data)
+# Get unmixed arbitrary units
+unmixed_abundances = result_context.abundances_AU
 
+print(unmixed_abundances.head())
+
+# Generate diagnostics (optional)
+# figs = pipeline.all_diagnostics()
+# if figs:
+#   figs[0].fig.savefig("lincomp_diagnostics.png") # Save diagnostic figures
 ```
 
-## Architecture Overview
+**Explore the documentation to learn more about:**
 
-Calibrie is built around the concept of **pipelines**, and the use of **context keys**. A pipeline is a sequence of **tasks** that produce and use data from other tasks.
-This data is stored in a context dictionary under a documented, specific key, that can be used by other tasks.
-
-This way, tasks can be designed to be relatively independent from each other, and can be reused in various combinations across different pipelines, as long as the context keys,
-a.k.a "pipeline data" they need are provided by the previous tasks. 
-
-An example of context keys would be `controls_values`, which is an array of fluorescence values produced by the `LoadControls` task, and used by most compensation tasks.
-
-A list of all the context keys required (and produced) by a task can be found in the documentation of the task.
-
-Calibrie provides a number of tasks, which can be used to build pipelines and range from simple data loading to complex compensation and calibration algorithms. 
-Many tasks provide a diagnostics method, which can be used to plot the results of the task and assess their quality.
-
-As convenience, Calibrie also provides a number of pre-built pipelines, which can be used as-is, or as a starting point for more complex pipelines.
-Users can also write their own tasks, and use them to build their custom pipelines.
-
-Pipeline can also be used for data analysis, and Calibrie provides a number of analysis tasks.
-
-
-### Initialization
-
-The initialize method is called once, before the pipeline is applied to any data. It is used to initialize the tasks, and to populate the context dictionary with each task's produced init data. 
-
-This, for example, is when the `LoadControls` task will load the controls from a CSV file, and store them in the context dictionary under the key `controls_values`, and when
-the `LinearUnmixing` task will compute the spillover matrix from the controls, and store it in the context dictionary under the key `spillover_matrix`.
-
-### Application
-
-The apply method is designed to process an array, or dataframe, of observations. It is called once for each batch of observations, and uses a second context dictionary, the batch context, to store and retrieve data.
-
-For example, the `LinearUnmixing` task will use the spillover matrix stored in the init context to compute the arbitraty units abundances of each protein in each observation, and store them in the batch context under the key `abundances_AU`.
-
-Then, if present, the `MEFCalibration` task will use these abundances to standardize them to MEFs, and store the result in the batch context under the key `abundances_MEF`.
-Finally, the pipeline will return the batch context, which contains the abundances of each protein in each observation in arbitrary units, 
-and in MEFs, + any other product of the pipeline application.
-
-
+*   [Getting Started](getting_started.md): A detailed tutorial using YAML configuration.
+*   [Usage Patterns](usage/index.md): How to define and run pipelines in Python and YAML.
+*   [Core Concepts](concepts/index.md): The theory behind the calibration steps.
+*   [API Reference](reference/index.md): Details on each task and class.

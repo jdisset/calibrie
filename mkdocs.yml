@@ -1,63 +1,83 @@
+# Project Information
 site_name: "Calibrie"
-repo_url: https://github.com/jdisset/calibrie
+site_description: "Modular analysis, unmixing, and calibration for fluorescence flow cytometry data."
+site_author: "Jean Disset"
+repo_url: https://github.com/jdisset/calibrie # Replace with your actual repo URL if different
+repo_name: jdisset/calibrie
+# edit_uri: "" # Optional: Link to edit pages directly in the repo
 
+# Theme Configuration
 theme:
-  name: "material"
-  logo: assets/calibrielogo.png
-  palette:
-    primary: white
+  name: material
+  logo: assets/calibrie.svg # Make sure this path is correct relative to 'docs/'
+  favicon: assets/calibrie.svg # Optional favicon
   features:
     - navigation.instant
-    - navigation.expand
-    - navigation.path
+    - navigation.tracking
     - navigation.indexes
     - navigation.top
+    - navigation.expand # Automatically expand sections with active page
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
+  palette:
+    primary: custom
 
-watch:
-  - calibrie/
+# Plugins
 
+plugins:
+  - search
+  - macros: # Simplified variable definition
+      task_disclaimer: '!!! info "This module contains a Pipeline Task. Tasks define steps within a Calibrie Pipeline and interact via the Context object."'
+  - section-index
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            # Docstring style
+            docstring_style: google
+            docstring_section_style: spacy
+            # Structure / Grouping
+            show_root_heading: true
+            show_root_full_path: false
+            show_category_heading: true
+            group_by_category: true
+            # Member Selection / Order
+            members_order: source
+            show_bases: false
+            show_signature_annotations: true
+            show_if_no_docstring: false
+            # Rendering Options
+            heading_level: 2
+            merge_init_into_class: true
+            separate_signature: true
+            line_length: 88
+
+# Markdown Extensions
 markdown_extensions:
   - admonition
   - pymdownx.details
   - pymdownx.superfences
-  - attr_list
-  - md_in_html
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.arithmatex:
       generic: true
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
 
+# MathJax Configuration
 extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
-
-plugins:
-  - search
-  - mkdocstrings:
-      handlers:
-        python:
-          options:
-            show_symbol_type_heading: true
-            show_symbol_type_toc: true
-            docstring_style: google
-            docstring_section_style: list
-            members_order: source
-            merge_init_into_class: true
-            show_bases: false
-            show_if_no_docstring: false
-            show_root_full_path: true
-            show_root_heading: true
-            show_source: false
-            show_submodules: false
-            group_by_category: true
-            show_root_full_path: true
-  - macros
-
-extra:
-  task_disclaimer: "!!! info \"This module contains a pipeline task. Pipeline tasks are not meant to be used by themselves.\""
-
-
-nav:
-  - Overview: index.md
-  - Modules & Tasks:
-      - Linear Unmixing: linearcomp.md
-      - Non Linear Least-Square Unmixing: nonlinearcomp.md
-  - Default pipelines: pipeline.md
+extra_css:
+  - stylesheets/extra.css

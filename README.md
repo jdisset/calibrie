@@ -1,123 +1,78 @@
-<img src="docs/logo_sd.png" alt="calibrie logo" width="64">
+# Calibrie <img src="docs/assets/calibrie_horizontal.png" alt="Calibrie Logo" width="200" style="vertical-align: bottom;">
 
-# Calibrie
+**Calibrie** is a modular Python library for the **analysis**, **unmixing**, and **calibration** of fluorescence flow cytometry data, particularly tailored for synthetic biology applications.
 
-Calibrie is a Python package for calibrating fluorescence values in flow cytometry data. 
-It uses color controls, blank controls, and beads with known fluorescence values for calibration.
+[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://jdisset.github.io/calibrie/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+<!-- Add other badges as relevant (e.g., PyPI version, build status) -->
+
+It implements multiple algorithms to turn raw fluorescence measurements into standardized, quantitative protein abundance units (like Molecules of Equivalent Fluorophore - MEF), along with numerous diagnostics and quality assessment tools. Calibrie is designed to promote **reproducible**, **modular**, and **sharable** cytometry analysis workflows.
+
+!!! warning "Alpha Stage"
+Calibrie is currently in **alpha**. While functional, the API might undergo changes, and documentation is actively being developed. Feedback and contributions are welcome!
 
 ## Installation
 
-To install the Calibrie package, follow these steps:
+Calibrie is not yet on PyPI. To install it, clone the repository and install it locally using pip:
 
-### For windows users
-If you don't have a python development environment, I'd suggest the following procedure:
-
-1. I recommend installing miniconda for windows: [Latest miniconda for windows 64 bits][https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe]
-2. Open the Anaconda Prompt (from the start menu)
-3. Create a new environment with python 3.8, as it's a version  that works for both cytoflow and calibrie (calibrie will work with any version >= 3.8) :
-   `conda create -n <name> python=3.8` where <name> is any name you want to give your environment (such as "flow")
-5. Activate the environment: `conda activate <name>`
-6. Install jupyterlab and git with `conda install jupyterlab git`
-7. Start jupyterlab with `jupyter lab` and open a terminal from the jupyterlab interface
-8. Clone and install calibrie in the directory of your choice, from the jupyterlab terminal:
-	```bash
-	git clone <calibrie_repository_url>`
-	cd calibrie
-	pip install jax[cpu] # this is needed to install all the jax dependencies
-	pip install -e .
-	```
-9. Clone and install the Calibrie repository:
-	```bash
-	git clone <calibrie_repository_url>`
-	cd calibrie
-	pip install -e .
-	```
-10. Windows require specific versions of certain packages so we'll install the dependencies manually:
-	```bash
-	pip install "jax[cpu]===0.3.25" -f https://whls.blob.core.windows.net/unstable/index.html --use-deprecated legacy-resolver
-	pip install flax==0.6.3 ott-jax==0.3.1 chex==0.1.5 optax==0.1.4 flax==0.6.3 orbax==0.0.15 --no-deps
-	pip install pandas numpy Pillow matplotlib PyYAML scipy flowio tqdm
-	```
-	
-
-### General procedure
-	```bash
-	git clone <calibrie_repository_url>`
-	cd calibrie
-	pip install -e .
-	```
-
-## Update
-
-To update the Calibrie package to the latest version, first pull the latest changes from the GitHub repository:
-
-```
-git pull
+```bash
+git clone https://github.com/jdisset/calibrie.git # Replace with your repo URL if different
+cd calibrie
+pip install .
+# For development (editable install):
+# pip install -e .
 ```
 
-Then, reinstall the package:
+Please ensure you have the necessary dependencies, especially JAX (refer to the [JAX Installation Guide](https://github.com/google/jax#installation) for hardware-specific instructions).
 
-```
-pip install --upgrade .
-```
+## Documentation
 
-## Usage
+**Full documentation, including tutorials, concept explanations, and API references, is available at:**
 
-Here's an example of how to use the Calibration class from the Calibrie package:
+**https://jdisset.github.io/calibrie**
+
+The documentation provides detailed guides on:
+
+- Getting started with calibration pipelines.
+- Using the Python API vs. YAML configuration.
+- Understanding the theory behind compensation, mapping, and MEF calibration.
+- Detailed API reference for all tasks and utilities.
+
+## Quick Example (Python API)
 
 ```python
-
-from calibrie import Calibration
+import calibrie as cal
 import pandas as pd
 
-# Your control and beads files
-beads = "path/to/beads/file.fcs"
+# Define controls and bead file paths
+controls_dict = {'EBFP2': 'path/to/ebfp2.fcs', ... , 'BLANK': 'path/to/blank.fcs'}
+beads_file = 'path/to/beads.fcs'
 
-# create the control dictionnary:
-# key = name of the control, value = path to the csv or fcs file
-# key follows the following convention (case insensitive):
-# single color control : the name of the protein. 'EBFP2', 'EYFP', ...
-# all color control: 'ALL'
-# blank: 'CNTL' or 'EMPTY'
-control_files = list(raw_path.glob('color_controls/*.csv'))
-# in this example I'm assuming that the control files are named like "KEY.blablabla.csv"
-# e.g. "EBFP2.2023-03-10.csv", "all.whatever.csv", "eMpTy.my_empty_ctrl.csv"
-# the relevant is the first part of the file name, before the first dot
-# so it's easy to extract it with the following line
-controls = {c.stem.split('.')[0]: c for c in control_files}
+# Define pipeline tasks (example)
+pipeline = cal.Pipeline(tasks={
+    "controls": cal.LoadControls(color_controls=controls_dict, ...),
+    "lincomp": cal.LinearCompensation(...),
+    "protmap": cal.ProteinMapping(reference_protein='EBFP2', ...),
+    "beads": cal.MEFBeadsTransform(beads_data=beads_file, ...), # Provides context for protmap
+    "export": cal.PandasExport(context_field_to_export='abundances_MEF')
+})
 
-# Initialize the Calibration instance
-cal = Calibration(controls, beads, reference_protein='MKATE', 
-				use_channels=['FITC', 'PACIFIC_BLUE', 'PE_TEXAS_RED', 'APC_ALEXA_700'])
+# Initialize and run
+pipeline.initialize()
+sample_data = cal.load_to_df("path/to/sample.fcs")
+results = pipeline.apply_all(sample_data)
+calibrated_df = results.output_df
 
-# Fit the calibration model
-cal.fit()
-
-# OPTIONAL: plot diagnostics, very useful to check that everything looks right
-cal.plot_bleedthrough_diagnostics() # plots the spectral signature matrix
-cal.plot_beads_diagnostics() # plots the results of the beads detection, assignment and calibration steps
-cal.plot_color_mapping_diagnostics() # plots the mapping from every protein to the reference one
-
-# Apply the calibration to your data
-data = pd.read_csv("path/to/data/file.csv")
-calibrated = cal.apply(data)
+print(calibrated_df.head())
 ```
 
-## Calibration Class
+_(See the full documentation for details on task parameters and YAML usage)_
 
-The Calibration class is the main class of the Calibrie package. It handles the calibration of the fluorescence values in a given experiment and can export to a calibrated pandas dataframe.
+## Contributing
 
-### Constructor Arguments
-- `color_controls_files`: A dictionary with keys as control protein names (e.g., 'eYFP') and values as paths to their corresponding FCS or CSV files.
-- `beads_file`: A string representing the path to the beads control FCS file.
-- `reference_protein`: (Optional) A string representing the name of the reference protein used to align other protein quantities. The default value is 'mkate'.
-- `reference_channel`: (Optional) A string representing the name of the reference channel used to convert to standard MEF units. The default value is 'PE_TEXAS_RED'.
-- `beads_mef_values`: (Optional) A dictionary associating the unit name with the list of reference values for the beads in this unit. The default value is SPHEROTECH_RCP_30_5a.
-- `channel_to_unit`: (Optional) A dictionary associating the channel name with the unit name. The default value is FORTESSA_CHANNELS.
-- `random_seed`: (Optional) An integer representing the random seed for any resampling that might be done. The default value is 42.
-- `use_channels`: (Optional) A list of channel names to use when computing protein quantity from channel values (i.e., bleedthrough correction). The default value is None, which means all available channels will be used.
-- `max_value`: (Optional) An integer representing the maximum fluorescence value used to detect saturation. The default value is FORTESSA_MAX_V.
-- `offset`: (Optional) An integer representing the offset to add to the fluorescence values to avoid negative values. The default value is FORTESSA_OFFSET.
+Contributions are welcome! Please feel free to open an issue or submit a pull request.
 
+## License
 
-Please refer to the comments and documentation in the calibrie.py file for more details.
+Calibrie is distributed under the MIT License. See `LICENSE` file for details.
