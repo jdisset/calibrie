@@ -1,4 +1,4 @@
-# Calibrie <img src="docs/assets/calibrie_horizontal.png" alt="Calibrie Logo" width="200" style="vertical-align: bottom;">
+#<img src="docs/assets/calibrie_horizontal.png" alt="Calibrie Logo" width="400" style="vertical-align: bottom;">
 
 **Calibrie** is a modular Python library for the **analysis**, **unmixing**, and **calibration** of fluorescence flow cytometry data, particularly tailored for synthetic biology applications.
 
