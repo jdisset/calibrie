@@ -127,6 +127,8 @@ class Context:
         return self.setv(key, value, [kp])
 
     def __getattr__(self, key):
+        if key.startswith('__') and key.endswith('__'):
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'")
         if key in self.__dict__:
             return super().__getattribute__(key)
         return self.get(key, stack_add_level=1)

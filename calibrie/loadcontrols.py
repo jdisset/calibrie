@@ -3,9 +3,10 @@ This module provides the LoadControls task, which loads single, multi and no-pro
 """
 
 from .pipeline import Task, DiagnosticFigure
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union, Annotated
 from . import utils as ut
 from calibrie.utils import LoadedData, Context
+from calibrie.gui.core import make_ui_field, ListManagerUI, DictEditorUI
 import numpy as np
 import jax.numpy as jnp
 from . import plots, utils
@@ -196,9 +197,22 @@ class LoadControls(Task):
     - `reference_channels`: an array of integer indices of the reference channels for each protein (proteins)
     """
 
-    color_controls: Dict[str | Tuple[str], LoadedData]
-    use_channels: List[str] = []
-    use_reference_channels: Dict[str, str] = {}  # protein -> channel
+    color_controls: Annotated[
+        Dict[Union[str, Tuple[str]], LoadedData],
+        make_ui_field(
+            DictEditorUI, help="Map control names (e.g., 'GFP', 'BLANK') or tuples to file paths."
+        ),
+    ] = {}
+    use_channels: Annotated[
+        List[str],
+        make_ui_field(ListManagerUI, help="List of channel names (exact match) to load and use."),
+    ] = []
+    use_reference_channels: Annotated[
+        Dict[str, str],
+        make_ui_field(
+            DictEditorUI, help="Map protein names to their primary reference channel name."
+        ),
+    ] = {}
 
     def pick_reference_channels(self, max_sat_proportion=0.001, min_dyn_range=3, **_):
         """
