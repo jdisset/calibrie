@@ -17,11 +17,7 @@ Calibrie is currently in **alpha**. While functional, the API might undergo chan
 Calibrie is not yet on PyPI. To install it, clone the repository and install it locally using pip:
 
 ```bash
-git clone https://github.com/jdisset/calibrie.git # Replace with your repo URL if different
-cd calibrie
-pip install .
-# For development (editable install):
-# pip install -e .
+pip install git+https://github.com/jdisset/calibrie.git
 ```
 
 Please ensure you have the necessary dependencies, especially JAX (refer to the [JAX Installation Guide](https://github.com/google/jax#installation) for hardware-specific instructions).
