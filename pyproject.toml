@@ -10,6 +10,7 @@ name = "calibrie"
 version = "0.1.0a"
 description = "A set of tools and utils for fluorescence data calibration."
 authors = [{name = "Jean Disset", email = "jdisset@mit.edu"}]
+requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
 	"pydantic",
