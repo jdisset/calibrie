@@ -402,6 +402,16 @@ class LoadControls(Task):
             self._protein_names,
         )
 
+        from copy import deepcopy
+
+        self._diag_controls_values = deepcopy(self._controls_values)
+        self._diag_controls_masks = deepcopy(self._controls_masks)
+        self._diag_channel_names = deepcopy(self._channel_names)
+        self._diag_protein_names = deepcopy(self._protein_names)
+        self._diag_saturation_thresholds = deepcopy(self._saturarion_thresholds)
+        self._diag_reference_channels = deepcopy(self._reference_channels)
+        self._diag_metrics = deepcopy(metrics)
+
         return Context(
             channel_correlations=metrics.correlations,
             channel_signal_strengths=metrics.signal_strengths,
@@ -455,10 +465,28 @@ class LoadControls(Task):
     ) -> Optional[List[DiagnosticFigure]]:
         figures = []
 
+        # remove copied keys from kw
+        kw2 = {
+            k: v
+            for k, v in kw.items()
+            if k
+            not in [
+                'controls_values',
+                'controls_masks',
+                'reference_channels',
+                'channel_names',
+                'protein_names',
+            ]
+        }
         f, _ = plots.plot_channels_to_reference(
-            **ctx,
-            **kw,
+            controls_values=self._diag_controls_values,
+            controls_masks=self._diag_controls_masks,
+            reference_channels=self._diag_reference_channels,
+            channel_names=self._diag_channel_names,
+            protein_names=self._diag_protein_names,
+            **kw2,
         )
+
         figures.append(DiagnosticFigure(fig=f, name='Raw channels to reference'))
 
         # use appropriate metrics based on whether we're showing all channels
@@ -472,7 +500,9 @@ class LoadControls(Task):
                 ctx['protein_names'],
             )
         )
-        channel_names = self._all_channel_names if show_all_channels else ctx['channel_names']
+        # channel_names = self._all_channel_names if show_all_channels else ctx['channel_names']
+        channel_names = self._all_channel_names if show_all_channels else self._diag_channel_names
+        protein_names = self._diag_protein_names
 
         # create quality metrics plot
         metrics_data = metrics.get_all_metrics()
@@ -493,7 +523,8 @@ class LoadControls(Task):
         ]
 
         for i, (ax, title) in enumerate(zip(axes.flat, titles)):
-            data = metrics_array[i].reshape(len(ctx['protein_names']), len(channel_names))
+            # data = metrics_array[i].reshape(len(ctx['protein_names']), len(channel_names))
+            data = metrics_array[i].reshape(len(protein_names), len(channel_names))
 
             im = ax.imshow(data, cmap='Blues', interpolation='nearest')
 
