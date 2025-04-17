@@ -14,7 +14,7 @@ dependencies = [
 	"shapely",
 	"numpy",
 	"pandas",
-	"dracon",
+	"dracon @ git+https://github.com/yourusername/dracon.git",
 	"matplotlib",
 	"flowio",
 	"ott-jax",

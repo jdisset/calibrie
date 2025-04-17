@@ -523,7 +523,6 @@ class Colinearization(Task):
             corrected_controls
         )
 
-        # Add this line:
         self._null_observations = corrected_controls[np.all(self._controls_masks == 0, axis=1)]
 
         self._log.debug("Resampling observations for linearization")
@@ -616,7 +615,6 @@ class Colinearization(Task):
                         pbar.update(1)
         return params
 
-    # Helper methods remain largely unchanged but are moved to be class methods
     @partial(jax.jit, static_argnums=(0,))
     def _regression(self, x, y, w, xbounds):
         """Perform regression with optional log transformation."""
@@ -665,11 +663,11 @@ class Colinearization(Task):
         old_loader = deepcopy(current_loader)
 
         def loader(data: Any, column_order: Optional[List[str]] = None) -> pd.DataFrame:
-            # First load data using all columns
             df = old_loader(data, None)  # Pass None to get all columns
 
             if df is not None and self._params is not None:
                 self._log.debug(f"Applying colinearization to data of shape {df.shape}")
+                print(f"Applying colinearization to data of shape {df.shape}")
 
                 # Get the list of channels that should be transformed
                 channels_to_transform = self._channel_names
