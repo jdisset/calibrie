@@ -29,6 +29,7 @@ dependencies = [
 	"xdialog",
 	"rich",
 	"joblib",
+	"json5",
 ]
 
 [project.scripts]
