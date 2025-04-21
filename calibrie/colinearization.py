@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 """
 This module implements a complex procedure for "colinearizing" multi-channel fluorescence measurements,
 particularly in situations where a single fluorescent protein emits in multiple channels but they do not

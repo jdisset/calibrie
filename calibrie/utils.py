@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 from pathlib import Path
 from dracon.utils import list_like, dict_like
 from copy import deepcopy

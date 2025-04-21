@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 from jaxopt import GaussNewton
 import matplotlib.patches as patches
 from calibrie.utils import Escaped

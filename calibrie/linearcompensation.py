@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 """
 This module provides the LinearCompensation task, which implements linear compensation of fluorescence values using
 a spillover matrix computed from single-protein controls.

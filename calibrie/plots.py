@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import scale as mscaleplo

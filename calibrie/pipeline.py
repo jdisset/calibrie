@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 import logging
 from rich.logging import RichHandler
 from calibrie.utils import ArbitraryModel, Context

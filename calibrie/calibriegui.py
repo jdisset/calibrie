@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 ## {{{                          --     import     --
 import shapely.geometry as sg
 import dearpygui.dearpygui as dpg

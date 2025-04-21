@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 ## {{{                          --     import     --
 from typing import Annotated, List, Any, Optional, Callable
 from calibrie.plots import CALIBRIE_DEFAULT_DENSITY_CMAP, make_symlog_ax

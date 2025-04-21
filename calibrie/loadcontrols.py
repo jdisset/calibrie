@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 """
 This module provides the LoadControls task, which loads single, multi and no-protein controls from a list of files.
 """

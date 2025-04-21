@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 import pandas as pd
 from .pipeline import Task
 import numpy as np
