@@ -84,6 +84,8 @@ class MEFBeadsTransform(Task):
         if self.use_channels is None:
             self.use_channels = []
 
+        self._log.debug(f'Initializing beads transform with {self.use_channels}')
+
         remove_chans = []
 
         assert self.use_channels is not None
@@ -104,12 +106,18 @@ class MEFBeadsTransform(Task):
             self._log.debug(f'No beads units for {remove_chans}. Removing them from use_channels')
             self.use_channels = [c for c in self.use_channels if c not in remove_chans]
 
-        all_chans = list(set(ctx.get('channel_names', []) + self.use_channels))
+        available_channels = ctx.get('channel_names', [])
+        self._log.debug(f'Available channels from context: {available_channels}')
+        all_chans = list(set(available_channels + self.use_channels))
+
         if len(all_chans) == 0:
             # we try to use the channels from the beads data intersected with what we have in channel_units
             chans_from_unit = set(list(self.channel_units.keys()))
             chans_from_data = set(list(self.beads_data.columns))
             all_chans = list(chans_from_unit.intersection(chans_from_data))
+            self._log.debug(
+                f'No channels found in context.\nThe MEF unit dictionary declares {len(chans_from_unit)} channels: {chans_from_unit}.\nThe beads data declares {len(chans_from_data)} channels: {chans_from_data}.\nUsing the intersection of both: {all_chans}'
+            )
             self.use_channels = all_chans
 
         self._log.debug(f'For beads, using channels: {self.use_channels}')
