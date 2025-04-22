@@ -439,7 +439,7 @@ def plot_channels_to_reference(
     coefs=None,
     autofluorescence=None,
     figscale=5,
-    logscale=False,
+    logscale=True,
     dpi=150,
     data_transform=None,
     quantiles_limits=None,
@@ -486,10 +486,12 @@ def plot_channels_to_reference(
 
             x = Y[:, ref_chan]
             y = Y[:, cid]
+
             if xlims is None:
                 xlims = [np.min(x), np.max(x)]
             if ylims is None:
                 ylims = [np.min(y), np.max(y)]
+
             if quantiles_limits is not None:
                 xlims = np.quantile(x, quantiles_limits)
                 ylims = np.quantile(y, quantiles_limits)
@@ -645,7 +647,9 @@ def make_density_cmap(name=None, alpha_start=1.0, alpha_end=1.0, base_cmap='Spec
     return density_cmap
 
 
-CALIBRIE_DEFAULT_DENSITY_CMAP = make_density_cmap('calibrie_density', alpha_start=1.0, alpha_end=1.0)
+CALIBRIE_DEFAULT_DENSITY_CMAP = make_density_cmap(
+    'calibrie_density', alpha_start=1.0, alpha_end=1.0
+)
 
 
 def density_histogram2d(
@@ -872,13 +876,15 @@ def range_plots(
             (x, y), relative_radius, color='k', fill=False, ls='--', alpha=0.5, lw=0.5
         )
         ax.add_patch(contour_relative_circle)
-        ax.text(x, y - 0.15, f'{100.0*ar[i]:.1f}%', ha='center', va='center', fontsize=8, color='k')
+        ax.text(
+            x, y - 0.15, f'{100.0 * ar[i]:.1f}%', ha='center', va='center', fontsize=8, color='k'
+        )
 
         if unsaturated_proportion[i] < 0.999:
             ax.text(
                 x + 0.25,
                 y + 0.5,
-                f'{100.0*(1.0-unsaturated_proportion[i]):.1f}% o.o.r',
+                f'{100.0 * (1.0 - unsaturated_proportion[i]):.1f}% o.o.r',
                 ha='left',
                 va='center',
                 fontsize=8,
