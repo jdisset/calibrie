@@ -118,7 +118,15 @@ class MEFBeadsTransform(Task):
             self._log.debug(
                 f'No channels found in context.\nThe MEF unit dictionary declares {len(chans_from_unit)} channels: {chans_from_unit}.\nThe beads data declares {len(chans_from_data)} channels: {chans_from_data}.\nUsing the intersection of both: {all_chans}'
             )
-            self.use_channels = all_chans
+
+        self.use_channels = all_chans
+
+        assert len(self.use_channels) > 0, (
+            f'In MEFBeadsTransform, no channels found in context or beads data.\n'
+            f'Available channels from context: {available_channels}\n'
+            f'Available channels from beads data: {self.beads_data.columns}\n'
+            f'Available channels from channel_units: {self.channel_units.keys()}\n'
+        )
 
         self._log.debug(f'For beads, using channels: {self.use_channels}')
 
