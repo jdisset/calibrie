@@ -65,6 +65,9 @@ class Pipeline(ArbitraryModel):
 
     def model_post_init(self, *args):
         super().model_post_init(*args)
+        self.setup_logging()
+
+    def setup_logging(self):
         # set up logging
         self._log = logging.getLogger('calibrie')
         if self._log.hasHandlers():

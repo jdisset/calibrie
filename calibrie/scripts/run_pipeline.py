@@ -67,6 +67,8 @@ class CalibrationProgram(LazyDraconModel):
         DeferredNode[cal.Pipeline], Arg(help='The pipeline to execute', is_file=True)
     ]
 
+    loglevel: Annotated[str, Arg(help='Logging level')] = 'INFO'
+
     xpfile: Annotated[str, Arg(help='Input experiment file to load')] = './experiment.json5'
 
     outputdir: Annotated[DeferredNode[str], Arg(help='Output directory')] = (
@@ -121,6 +123,9 @@ class CalibrationProgram(LazyDraconModel):
         self._outputdir = Path(self._outputdir).expanduser().resolve()
 
         self._outputdir.mkdir(parents=True, exist_ok=True)
+
+        self._resolved_pipeline.loglevel = self.loglevel
+        self._resolved_pipeline.setup_logging()
 
         return self._resolved_pipeline
 
