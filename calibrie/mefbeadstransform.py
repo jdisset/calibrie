@@ -112,8 +112,11 @@ class MEFBeadsTransform(Task):
             all_chans = list(chans_from_unit.intersection(chans_from_data))
             self.use_channels = all_chans
 
+        self._log.debug(f'For beads, using channels: {self.use_channels}')
 
         self._beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
+        if self._beads_data_array.shape[0] == 0:
+            raise ValueError('Beads data is empty')
 
         self._beads_data_array = self._beads_data_array[
             :, [all_chans.index(c) for c in self.use_channels]
@@ -143,10 +146,10 @@ class MEFBeadsTransform(Task):
 
         self._saturation_thresholds = np.array(self._saturation_thresholds)
 
-        self._log.debug(f'Computing beads locations')
+        self._log.debug('Computing beads locations')
         self.compute_peaks(self._beads_data_array, self._beads_mef_array)
 
-        self._log.debug(f'Fitting regressions')
+        self._log.debug('Fitting regressions')
         self.fit_regressions()
 
         if self.apply_on_load:
@@ -193,7 +196,22 @@ class MEFBeadsTransform(Task):
     ):
         """Compute coordinates of each bead's peak in all channels"""
 
-        assert beads_observations.shape[1] == beads_mef_values.shape[1]
+        self._log.debug(
+            f'Computing peaks for beads observation of shape {beads_observations.shape}'
+        )
+        self._log.debug(f'MEF values: {beads_mef_values}')
+
+        if beads_observations.shape[0] == 0:
+            raise ValueError('No beads observations found')
+        if beads_mef_values.shape[0] == 0:
+            raise ValueError('No beads MEF values found')
+
+        # assert beads_observations.shape[1] == beads_mef_values.shape[1]
+        if beads_observations.shape[1] != beads_mef_values.shape[1]:
+            raise ValueError(
+                f'Number of channels in beads observations ({beads_observations.shape[1]}) '
+                f'does not match number of channels in beads MEF values ({beads_mef_values.shape[1]})'
+            )
 
         if beads_observations.shape[0] > self.resample_observations_to:
             reorder = np.random.choice(
@@ -695,7 +713,7 @@ class MEFBeadsTransform(Task):
                 ax.text(
                     0,
                     0.2,
-                    f'quality: {100.0*precision:.1f}%',
+                    f'quality: {100.0 * precision:.1f}%',
                     fontsize=9,
                     color=color,
                     horizontalalignment='center',
