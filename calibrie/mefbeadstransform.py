@@ -346,6 +346,18 @@ class MEFBeadsTransform(Task):
 
     def transform_channels_to_MEF(self, x, channel_names: List[str]):
         self._log.debug(f'Calibrating values to MEF, loading channels {channel_names}')
+
+        for cname in channel_names:
+            if cname.upper() not in self.use_channels:
+                chans_from_unit = set(list(self.channel_units.keys()))
+                chans_from_data = set(list(self.beads_data.columns))
+                raise ValueError(
+                    f'Was asked to calibrate to MEF units of "{cname}", but there is no known MEF transform for this channel.\n'
+                    f'Transforms are available for channels {self.use_channels}'
+                    f'The beads data has the following channels: {chans_from_data}.\n'
+                    f'And the MEF units were defined for the following channels: {chans_from_unit}'
+                )
+
         chan_ids = np.array([self.use_channels.index(cname.upper()) for cname in channel_names])
         assert np.all(chan_ids >= 0), f'Channel names {channel_names} not found in use_channels'
         tr_abundances = self._tr(x)
