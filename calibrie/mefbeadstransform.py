@@ -28,7 +28,7 @@ from ott.solvers.linear.sinkhorn import Sinkhorn
 
 from .utils import Context, LoadedData
 
-from dracon.utils import DictLike
+from dracon.utils import DictLike, dict_like
 from dracon.loader import LoadedConfig
 import logging
 
@@ -88,30 +88,42 @@ class MEFBeadsTransform(Task):
 
         remove_chans = []
 
-        assert self.use_channels is not None
+        assert self.channel_units, 'No MEF channel units provided. Use the channel_units argument'
+        assert dict_like(self.channel_units), (
+            'Channel units should be a dictionary of channel names to units or a path to a file contianing a dict.'
+            'Use the channel_units argument'
+        )
 
-        for c in self.use_channels:
-            if c not in self.channel_units:
-                if not self.ignore_channels_with_missing_units:
-                    raise ValueError(
-                        f"""No MEF units for {c}.
-                        Pass 'ignore_channels_with_missing_units=True' to ignore"""
-                    )
-                else:
-                    remove_chans.append(c)
-            elif self.channel_units[c] not in self.beads_mef_values:
-                raise ValueError(f'No unit values for channel {c} ({self.channel_units[c]})')
+        if len(self.use_channels) > 0:
+            from copy import deepcopy
 
-        if len(remove_chans) > 0:
-            self._log.debug(f'No beads units for {remove_chans}. Removing them from use_channels')
-            self.use_channels = [c for c in self.use_channels if c not in remove_chans]
+            original_use_channels = deepcopy(self.use_channels)
+            for c in self.use_channels:
+                if c not in self.channel_units:
+                    if not self.ignore_channels_with_missing_units:
+                        raise ValueError(
+                            f"""No MEF units for {c}.
+                            Pass 'ignore_channels_with_missing_units=True' to ignore"""
+                        )
+                    else:
+                        remove_chans.append(c)
+                elif self.channel_units[c] not in self.beads_mef_values:  # type: ignore
+                    raise ValueError(f'No unit values for channel {c} ({self.channel_units[c]})')  # type: ignore
 
-        available_channels = ctx.get('channel_names', [])
-        self._log.debug(f'Available channels from context: {available_channels}')
-        all_chans = list(set(available_channels + self.use_channels))
+            if len(remove_chans) > 0:
+                self._log.debug(
+                    f'No beads units for {remove_chans}. Removing them from use_channels'
+                )
+                self.use_channels = [c for c in self.use_channels if c not in remove_chans]
 
-        if len(all_chans) == 0:
-            # we try to use the channels from the beads data intersected with what we have in channel_units
+            if len(self.use_channels) == 0:
+                self._log.debug(
+                    f'In MEFBeadsTransform, user asked to use {original_use_channels}.\n'
+                    f'Had to remove {remove_chans} because they have no associated MEF units.\n'
+                    f'No channels left to use. Falling back to auto detection.'
+                )
+
+        if len(self.use_channels) == 0:
             chans_from_unit = set(list(self.channel_units.keys()))
             chans_from_data = set(list(self.beads_data.columns))
             all_chans = list(chans_from_unit.intersection(chans_from_data))
@@ -119,14 +131,13 @@ class MEFBeadsTransform(Task):
                 f'No channels found in context.\nThe MEF unit dictionary declares {len(chans_from_unit)} channels: {chans_from_unit}.\nThe beads data declares {len(chans_from_data)} channels: {chans_from_data}.\nUsing the intersection of both: {all_chans}'
             )
 
-        self.use_channels = all_chans
+            self.use_channels = all_chans
 
-        assert len(self.use_channels) > 0, (
-            f'In MEFBeadsTransform, no channels found in context or beads data.\n'
-            f'Available channels from context: {available_channels}\n'
-            f'Available channels from beads data: {self.beads_data.columns}\n'
-            f'Available channels from channel_units: {self.channel_units.keys()}\n'
-        )
+            assert len(self.use_channels) > 0, (
+                f'In MEFBeadsTransform, no channels found in context or beads data.\n'
+                f'Available channels from beads data: {self.beads_data.columns}\n'
+                f'Available channels from channel_units: {self.channel_units.keys()}\n'
+            )
 
         self._log.debug(f'For beads, using channels: {self.use_channels}')
 
