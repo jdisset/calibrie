@@ -80,6 +80,7 @@ class Pipeline(ArbitraryModel):
         self._ordered_task_list: List[Task] = []
         for task_name, task in self.tasks.items():
             task._log = self._log.getChild(task_name)
+            task._log.setLevel(self.loglevel)
 
     def get_namehash(self):
         self_json = self.model_dump()
