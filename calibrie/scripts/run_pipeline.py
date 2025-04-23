@@ -1,3 +1,7 @@
+# File: calibrie/scripts/run_pipeline.py
+# Copyright (c) 2025 Jean Disset
+# MIT License - see LICENSE file for details.
+
 import dracon as dr
 import json
 from dracon.utils import with_indent
@@ -64,28 +68,52 @@ def run_and_save_diagnostics(pipeline, outputdir):
 
 class CalibrationProgram(LazyDraconModel):
     pipeline: Annotated[
-        DeferredNode[cal.Pipeline], Arg(help='The pipeline to execute', is_file=True)
+        DeferredNode[cal.Pipeline],
+        Arg(help='Path to the YAML pipeline configuration file.', is_file=True),
     ]
 
-    loglevel: Annotated[str, Arg(help='Logging level')] = 'INFO'
+    loglevel: Annotated[
+        Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        Arg(help='Set the logging level.'),
+    ] = 'INFO'
 
-    xpfile: Annotated[str, Arg(help='Input experiment file to load')] = './experiment.json5'
+    xpfile: Annotated[
+        str,
+        Arg(help='Path to the experiment metadata file (JSON5 format).'),
+    ] = './experiment.json5'
 
-    outputdir: Annotated[DeferredNode[str], Arg(help='Output directory')] = (
-        '${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}'
-    )
+    outputdir: Annotated[
+        DeferredNode[str],
+        Arg(help='Directory to save calibrated output files.'),
+    ] = '${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}'
 
     datapath: Annotated[
-        str, Arg(help='The path to the directory containing the data files, relative to the xpfile')
+        str,
+        Arg(help='Base directory containing the raw data files, relative to the xpfile.'),
     ] = './data/raw_data/'
 
-    export_format: Annotated[Literal['csv', 'parquet'], Arg(help='Output file format')] = 'parquet'
+    export_format: Annotated[
+        Literal['csv', 'parquet', 'json', 'hdf5', 'feather'],
+        Arg(help='Format for the exported calibrated data files.'),
+    ] = 'parquet'
 
-    diagnostics: Annotated[bool, Arg(help='Whether to generate diagnostic figures')] = True
+    skip_diagnostics: Annotated[
+        bool,
+        Arg(help='If set, skip generating diagnostic figures.'),
+    ] = False
+
     diagnostics_output_dir: Annotated[
-        Optional[str], Arg(help='The directory to save diagnostic figures to')
+        Optional[str],
+        Arg(
+            help='Directory to save diagnostic figures (if generated).',
+            default_str='<outputdir>/diagnostics-<namehash>',
+        ),
     ] = None
-    diagnostics_only: Annotated[bool, Arg(help='Just run diagnostics')] = False
+
+    diagnostics_only: Annotated[
+        bool,
+        Arg(help='If set, only run diagnostics, do not process samples.'),
+    ] = False
 
     def build_pipeline(self):
         self._datadir = (Path(self.xpfile).parent / self.datapath).expanduser().resolve()
@@ -156,13 +184,29 @@ class CalibrationProgram(LazyDraconModel):
             data.to_csv(output_path, index=False)
         elif file_format == 'parquet':
             data.to_parquet(output_path, compression='zstd')
+        elif file_format == 'json':
+            data.to_json(output_path, orient='records', indent=2)
+        elif file_format == 'hdf5':
+            try:
+                import tables  # noqa: F401
+            except ImportError:
+                log.error('HDF5 export requires tables. pip install tables')
+                return
+            data.to_hdf(output_path, key='data', mode='w', complevel=5, complib='zlib')
+        elif file_format == 'feather':
+            try:
+                import pyarrow  # noqa F401
+            except ImportError:
+                log.error('Feather export requires pyarrow. pip install pyarrow')
+                return
+            data.to_feather(output_path)
         else:
             raise ValueError(f'Unsupported file format: {file_format}')
 
     def run(self):
         self.build_pipeline()
         self._resolved_pipeline.initialize()
-        if self.diagnostics:
+        if not self.skip_diagnostics:
             if self.diagnostics_output_dir:
                 diag_output_dir = Path(self.diagnostics_output_dir).expanduser().resolve()
             else:
@@ -190,7 +234,7 @@ def main():
     prog = make_program(
         CalibrationProgram,
         name='calibrie-run',
-        description='Calibration of data files and experiments.',
+        description=('Execute a Calibrie fluorescence calibration pipeline.'),
     )
     calib, args = prog.parse_args(
         sys.argv[1:],
