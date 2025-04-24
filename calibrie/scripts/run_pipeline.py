@@ -3,6 +3,7 @@
 # MIT License - see LICENSE file for details.
 
 import dracon as dr
+from dracon import construct
 import json
 from dracon.utils import with_indent
 from dracon.deferred import DeferredNode
@@ -32,9 +33,22 @@ from calibrie import (
     AbundanceCutoff,
     Pipeline,
 )
-import dracon as dr
 import matplotlib
 import logging
+
+CTX = {
+    'GatingTask': GatingTask,
+    'Colinearization': Colinearization,
+    'PolygonGate': PolygonGate,
+    'LoadControls': LoadControls,
+    'LinearCompensation': LinearCompensation,
+    'ProteinMapping': ProteinMapping,
+    'MEFBeadsCalibration': MEFBeadsCalibration,
+    'MEFBeadsTransform': MEFBeadsTransform,
+    'PandasExport': PandasExport,
+    'AbundanceCutoff': AbundanceCutoff,
+    'Pipeline': Pipeline,
+}
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +82,8 @@ def run_and_save_diagnostics(pipeline, outputdir):
 
 class CalibrationProgram(LazyDraconModel):
     pipeline: Annotated[
-        DeferredNode[cal.Pipeline],
-        Arg(help='Path to the YAML pipeline configuration file.', is_file=True),
+        str,
+        Arg(help='Path to the YAML pipeline configuration file.'),
     ]
 
     loglevel: Annotated[
@@ -133,15 +147,22 @@ class CalibrationProgram(LazyDraconModel):
         for name, path in self._control_files.items():
             assert Path(path).exists(), f'File {path} not found for control {name}'
 
-        self._context = {}
+        self._context = CTX.copy()
         self._context['$BEAD_FILE'] = beads_file.as_posix()
         self._context['$CONTROL_FILES'] = self._control_files
         self._context['$XP_FILE'] = self.xpfile
         self._context['$XP_DIRNAME'] = Path(self.xpfile).parent.name
         self._context['$XP_DATADIR'] = self._datadir.as_posix()
 
-        self._resolved_pipeline = self.pipeline.construct(context=self._context)
-        resolve_all_lazy(self._resolved_pipeline)
+        # load pipeline
+        pipeline_file = Path(self.pipeline).expanduser().resolve()
+        assert pipeline_file.exists(), f'Pipeline file {pipeline_file} not found'
+        self._resolved_pipeline = dr.load(
+            pipeline_file,
+            raw_dict=True,
+            context=self._context,
+            enable_interpolation=True,
+        )
         if not isinstance(self._resolved_pipeline, cal.Pipeline):
             self._resolved_pipeline = cal.Pipeline(**self._resolved_pipeline)
 
@@ -238,23 +259,8 @@ def main():
     )
     calib, args = prog.parse_args(
         sys.argv[1:],
-        context={
-            'GatingTask': GatingTask,
-            'Colinearization': Colinearization,
-            'PolygonGate': PolygonGate,
-            'LoadControls': LoadControls,
-            'LinearCompensation': LinearCompensation,
-            'ProteinMapping': ProteinMapping,
-            'MEFBeadsCalibration': MEFBeadsCalibration,
-            'MEFBeadsTransform': MEFBeadsTransform,
-            'PandasExport': PandasExport,
-            'AbundanceCutoff': AbundanceCutoff,
-            'Pipeline': Pipeline,
-        },
-        deferred_paths=[
-            '/pipeline',
-            '/outputdir',
-        ],
+        context=CTX,
+        deferred_paths=[],
     )
     calib.run()
 
