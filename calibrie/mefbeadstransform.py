@@ -21,7 +21,6 @@ from typing import List, Dict, Tuple, Optional, Any, Callable
 from jax.scipy.stats import gaussian_kde
 import pandas as pd
 
-from scipy.interpolate import UnivariateSpline
 from ott.geometry.pointcloud import PointCloud
 from ott.problems.linear.linear_problem import LinearProblem
 from ott.solvers.linear.sinkhorn import Sinkhorn
@@ -183,10 +182,12 @@ class MEFBeadsTransform(Task):
             return Context(
                 cell_data_loader=self.make_loader(ctx.cell_data_loader),
                 transform_to_MEF=self.transform_channels_to_MEF,
+                transform_MEF_to_AU=self.transform_MEF_to_AU,
             )
         else:
             return Context(
                 transform_to_MEF=self.transform_channels_to_MEF,
+                transform_MEF_to_AU=self.transform_MEF_to_AU,
             )
 
     def load_cells_with_MEF_channels(
@@ -351,6 +352,7 @@ class MEFBeadsTransform(Task):
         self._peak_weights = W
         # we fit a regression for each channel
         self._params = []
+        self._inverse_params = []
         for i in range(len(self.use_channels)):
             peaks_au = self._bead_peak_locations[:, i]
             beads_mef = self._mef_tr[:, i]
@@ -360,8 +362,15 @@ class MEFBeadsTransform(Task):
                 w=W[:, i],
                 xbounds=self._saturation_thresholds_tr[i],
             )
+            new_inverse_params = self._regression(
+                beads_mef,
+                peaks_au,
+                w=W[:, i],
+                xbounds=self._saturation_thresholds_tr[i],
+            )
 
             self._params.append(new_params)
+            self._inverse_params.append(new_inverse_params)
 
     def transform_channels_to_MEF(self, x, channel_names: List[str]):
         self._log.debug(f'Calibrating values to MEF, loading channels {channel_names}')
@@ -390,6 +399,35 @@ class MEFBeadsTransform(Task):
             [utils.evaluate_stacked_poly(o, p) for o, p in zip(tr_abundances.T, params)]
         )
         y = self._itr(tr_calibrated).T
+        return y
+
+    def transform_MEF_to_AU(self, x, channel_names: List[str]):
+        # inverse of transform_channels_to_MEF
+        self._log.debug(f'Converting MEF values back to AU, loading channels {channel_names}')
+        chan_ids = np.array([self.use_channels.index(cname.upper()) for cname in channel_names])
+
+        for cname in channel_names:
+            if cname.upper() not in self.use_channels:
+                chans_from_unit = set(list(self.channel_units.keys()))
+                chans_from_data = set(list(self.beads_data.columns))
+                raise ValueError(
+                    f'Was asked to convert MEF units of "{cname}" back to AU, but there is no known MEF transform for this channel.\n'
+                    f'Transforms are available for channels {self.use_channels}'
+                    f'The beads data has the following channels: {chans_from_data}.\n'
+                    f'And the MEF units were defined for the following channels: {chans_from_unit}'
+                )
+
+        assert np.all(chan_ids >= 0), f'Channel names {channel_names} not found in use_channels'
+        if len(chan_ids) == 1:  # mapping to a reference channel
+            params = [self._inverse_params[chan_ids[0]] for _ in range(x.shape[1])]
+        else:
+            params = [self._inverse_params[i] for i in chan_ids]
+
+        tr_mef = self._tr(x)
+        tr_arbitrary = np.array(
+            [utils.evaluate_stacked_poly(o, p) for o, p in zip(tr_mef.T, params)]
+        ).T
+        y = self._itr(tr_arbitrary)
         return y
 
     ##────────────────────────────────────────────────────────────────────────────}}}
