@@ -5,7 +5,7 @@
 import dracon as dr
 import json
 from dracon.utils import with_indent
-from dracon.deferred import DeferredNode
+from dracon.deferred import DeferredNode, make_deferred
 from dracon.lazy import LazyDraconModel, resolve_all_lazy
 import pandas as pd
 import time
@@ -15,7 +15,7 @@ import dracon
 import calibrie as cal
 from pathlib import Path
 from typing import List, Tuple, Union, Annotated, Dict, Any, Optional, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 import sys
 import json5
 from calibrie.pipeline import DiagnosticFigure
@@ -84,6 +84,7 @@ class CalibrationProgram(LazyDraconModel):
 
     outputdir: Annotated[
         DeferredNode[str],
+        BeforeValidator(make_deferred),
         Arg(help='Directory to save calibrated output files.'),
     ] = '${"$XP_DATADIR/../calibrated/$PIPELINE_NAME"}'
 
@@ -178,6 +179,7 @@ class CalibrationProgram(LazyDraconModel):
         self._outputdir.mkdir(parents=True, exist_ok=True)
         fname = f'{sample["name"]}.{file_format}'
         output_path = self._outputdir / fname
+
         print(f'Saving calibrated data to {output_path}')
 
         if file_format == 'csv':
@@ -252,6 +254,9 @@ def main():
             'Pipeline': Pipeline,
         },
     )
+
+    print(dr.dump(calib))
+
     calib.run()
 
 
