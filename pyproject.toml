@@ -20,7 +20,7 @@ dependencies = [
 	"pandas",
 	"dracon @ git+https://github.com/jdisset/dracon.git",
 	"matplotlib",
-	"flowio",
+	"fcsparser",
 	"ott-jax",
 	"optax",
 	"jax",
