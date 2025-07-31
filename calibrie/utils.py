@@ -38,6 +38,10 @@ from typing import Annotated
 
 import importlib.resources as pkg_resources
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 config_path = Path(str(pkg_resources.files('calibrie') / 'config'))
 
 ## {{{                           --     types     --
@@ -261,10 +265,34 @@ def astuple(x):
 
 
 def load_fcs_to_df(fcs_file):
-    fcs_data = flowio.FlowData(fcs_file.as_posix())
-    channels = [fcs_data.channels[str(i + 1)]['PnN'] for i in range(fcs_data.channel_count)]
-    original_data = np.reshape(fcs_data.events, (-1, fcs_data.channel_count))
-    return pd.DataFrame(original_data, columns=escape(channels))
+    try:
+        fcs_data = flowio.FlowData(fcs_file.as_posix())
+    except Exception as e:
+        logger.error(f"Failed to load FCS file: {fcs_file}. Error: {e}")
+        logger.exception(e)
+        raise
+    try:
+        channels = []
+        for i in range(fcs_data.channel_count):
+            try:
+                channel = fcs_data.channels[str(i + 1)]['PnN']
+                channels.append(channel)
+            except KeyError as ke:
+                available_channels = [
+                    fcs_data.channels[k]['PnN']
+                    for k in fcs_data.channels
+                    if 'PnN' in fcs_data.channels[k]
+                ]
+                logger.error(
+                    f"Channel {i + 1} not found in file {fcs_file}. Available channels: {available_channels}"
+                )
+                raise
+        original_data = np.reshape(fcs_data.events, (-1, fcs_data.channel_count))
+        return pd.DataFrame(original_data, columns=escape(channels))
+    except Exception as e:
+        logger.error(f"Error processing channels in file {fcs_file}: {e}")
+        logger.exception(e)
+        raise
 
 
 def load_to_df(data, column_order=None):
