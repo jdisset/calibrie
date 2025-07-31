@@ -266,7 +266,7 @@ def astuple(x):
 
 def load_fcs_to_df(fcs_file):
     try:
-        fcs_data = flowio.FlowData(fcs_file.as_posix())
+        fcs_data = flowio.FlowData(str(fcs_file))
     except Exception as e:
         logger.error(f"Failed to load FCS file: {fcs_file}. Error: {e}")
         logger.exception(e)
