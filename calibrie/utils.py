@@ -6,7 +6,7 @@ from dracon.utils import list_like, dict_like
 from copy import deepcopy
 import numpy as np
 import pandas as pd
-import flowio
+import fcsparser
 import jax.numpy as jnp
 from copy import deepcopy
 import jax
@@ -266,31 +266,14 @@ def astuple(x):
 
 def load_fcs_to_df(fcs_file):
     try:
-        fcs_data = flowio.FlowData(str(fcs_file))
+        meta, data = fcsparser.parse(str(fcs_file), reformat_meta=True)
+
+        data.columns = escape(list(data.columns))
+
+        return data
+
     except Exception as e:
         logger.error(f"Failed to load FCS file: {fcs_file}. Error: {e}")
-        logger.exception(e)
-        raise
-    try:
-        channels = []
-        for i in range(fcs_data.channel_count):
-            try:
-                channel = fcs_data.channels[str(i + 1)]['PnN']
-                channels.append(channel)
-            except KeyError as ke:
-                available_channels = [
-                    fcs_data.channels[k]['PnN']
-                    for k in fcs_data.channels
-                    if 'PnN' in fcs_data.channels[k]
-                ]
-                logger.error(
-                    f"Channel {i + 1} not found in file {fcs_file}. Available channels: {available_channels}"
-                )
-                raise
-        original_data = np.reshape(fcs_data.events, (-1, fcs_data.channel_count))
-        return pd.DataFrame(original_data, columns=escape(channels))
-    except Exception as e:
-        logger.error(f"Error processing channels in file {fcs_file}: {e}")
         logger.exception(e)
         raise
 
