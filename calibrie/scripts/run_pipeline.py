@@ -4,7 +4,7 @@
 
 import dracon as dr
 import json
-from dracon.utils import with_indent
+from dracon.trace import with_indent
 from dracon.deferred import DeferredNode, make_deferred
 from dracon.lazy import LazyDraconModel, resolve_all_lazy
 import pandas as pd

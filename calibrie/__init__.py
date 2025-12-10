@@ -13,4 +13,4 @@ from .colinearization import Colinearization
 from .cutoff import AbundanceCutoff
 from .mefcalibration import MEFBeadsCalibration
 from .pandasexport import PandasExport
-from . import plots, utils
+from . import plots, utils, scripts
