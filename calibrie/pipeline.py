@@ -2,8 +2,10 @@
 # MIT License - see LICENSE file for details.
 
 import logging
+from pathlib import Path
 from rich.logging import RichHandler
 from calibrie.utils import ArbitraryModel, Context
+from calibrie.metrics import TaskMetrics
 
 from typing import List, Dict, Any, Optional, Union
 from pydantic import Field, ConfigDict
@@ -11,6 +13,7 @@ from matplotlib.figure import Figure
 import xxhash
 import base64
 import json
+import dracon
 
 MISSING = object()
 
@@ -62,10 +65,12 @@ class Pipeline(ArbitraryModel):
     loglevel: str = "NOTSET"
     notes: str = ""
     name: str = ""
+    metrics_filename: str = "metrics.yaml"
 
     def model_post_init(self, *args):
         super().model_post_init(*args)
         self.setup_logging()
+        self._metrics: Dict[str, TaskMetrics] = {}
 
     def setup_logging(self):
         # set up logging
@@ -104,7 +109,13 @@ class Pipeline(ArbitraryModel):
         for task in self._ordered_task_list:
             print(f"Initializing task {task.__class__.__name__}")
             self._log.debug(f"Initializing task {task.__class__.__name__}")
-            self._context.update(task.initialize(self._context))
+            task_output = task.initialize(self._context)
+            self._context.update(task_output)
+            if 'metrics' in task_output:
+                metrics = task_output.metrics
+                if isinstance(metrics, TaskMetrics):
+                    metrics.task_name = task._name
+                    self._metrics[task._name] = metrics
 
     def apply_all(self, input):
         self.order_tasks_and_assign_names()
@@ -156,3 +167,16 @@ class Pipeline(ArbitraryModel):
                 traceback.print_exc()
 
         return all_figs
+
+    def get_all_metrics(self) -> dict:
+        return {name: m.model_dump() for name, m in self._metrics.items()}
+
+    def save_metrics(self, output_dir: Union[str, Path]):
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        metrics_path = output_dir / self.metrics_filename
+        metrics_data = self.get_all_metrics()
+        yaml_str = dracon.dump(metrics_data)
+        with open(metrics_path, 'w') as f:
+            f.write(yaml_str)
+        self._log.info(f"Metrics saved to {metrics_path}")

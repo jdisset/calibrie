@@ -6,6 +6,7 @@ This module provides the LoadControls task, which loads single, multi and no-pro
 """
 
 from .pipeline import Task, DiagnosticFigure
+from .metrics import TaskMetrics
 from typing import List, Dict, Tuple, Optional
 from . import utils as ut
 from calibrie.utils import LoadedData, Context
@@ -415,6 +416,8 @@ class LoadControls(Task):
         self._diag_reference_channels = deepcopy(self._reference_channels)
         self._diag_metrics = deepcopy(metrics)
 
+        task_metrics = self._compute_task_metrics(metrics)
+
         return Context(
             channel_correlations=metrics.correlations,
             channel_signal_strengths=metrics.signal_strengths,
@@ -429,7 +432,53 @@ class LoadControls(Task):
             channel_names=self._channel_names,
             saturation_thresholds=self._saturarion_thresholds,
             reference_channels=self._reference_channels,
+            metrics=task_metrics,
         )
+
+    def _compute_task_metrics(self, channel_metrics: ChannelMetrics) -> TaskMetrics:
+        metrics = TaskMetrics()
+        quality = {}
+        for prot in self._protein_names:
+            if prot not in channel_metrics.signal_to_noise:
+                continue
+            ref_idx = self._reference_channels[self._protein_names.index(prot)]
+            ref_chan = self._channel_names[ref_idx]
+            snr_vals = sorted(channel_metrics.signal_to_noise[prot].values(), reverse=True)
+            quality[prot] = {
+                'reference_channel': ref_chan,
+                'reference_snr': float(channel_metrics.signal_to_noise[prot][ref_chan]),
+                'reference_specificity': float(channel_metrics.specificities[prot][ref_chan]),
+                'reference_dynamic_range': float(channel_metrics.dynamic_ranges[prot][ref_chan]),
+                'reference_dominance': float(snr_vals[0] / snr_vals[1]) if len(snr_vals) > 1 and snr_vals[1] > 0 else float('inf'),
+            }
+        metrics.add('channel_quality_per_protein', quality,
+            'Per-protein: reference_snr, reference_specificity, reference_dynamic_range, reference_dominance.', scope='individual')
+
+        single = self._controls_masks.sum(axis=1) == 1
+        events = {
+            'blank_events': int(np.sum(~np.any(self._controls_masks, axis=1))),
+            'all_color_events': int(np.sum(np.all(self._controls_masks, axis=1))),
+            'total_events': int(self._controls_values.shape[0]),
+            **{f'{p}_single_events': int(np.sum(single & self._controls_masks[:, i].astype(bool))) for i, p in enumerate(self._protein_names)}
+        }
+        metrics.add('event_counts', events, 'Events per control type.', scope='individual')
+
+        snr = [d['reference_snr'] for d in quality.values()]
+        spec = [d['reference_specificity'] for d in quality.values()]
+        dom = [d['reference_dominance'] for d in quality.values() if d['reference_dominance'] != float('inf')]
+
+        if snr:
+            metrics.add('min_reference_snr', float(np.min(snr)), 'Min SNR. <1 is weak.', scope='global')
+            metrics.add('mean_reference_snr', float(np.mean(snr)), 'Mean SNR.', scope='global')
+        if dom:
+            metrics.add('min_reference_dominance', float(np.min(dom)), 'Min dominance. >2 good, <1.5 uncertain.', scope='global')
+        if spec:
+            metrics.add('min_reference_specificity', float(np.min(spec)), 'Min specificity. <1 is high crosstalk.', scope='global')
+        metrics.add('num_proteins', len(self._protein_names), 'Proteins in calibration.', scope='global')
+        metrics.add('num_channels', len(self._channel_names), 'Channels used.', scope='global')
+        metrics.add('protein_names', list(self._protein_names), 'List of proteins.', scope='global')
+        metrics.add('channel_names', list(self._channel_names), 'List of channels used.', scope='global')
+        return metrics
 
     def _process_controls(self, controls):
         """Helper to process controls into values and masks arrays."""

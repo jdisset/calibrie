@@ -28,8 +28,11 @@ import numpy as np
 from functools import partial
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any, Optional
+from scipy.signal import find_peaks
+from scipy.ndimage import gaussian_filter1d
 from .pipeline import Task, DiagnosticFigure
 from .utils import Context, Escaped, generate_controls_dict
+from .metrics import TaskMetrics
 from mpl_toolkits.axes_grid1 import make_axes_locatable, axes_size
 from . import plots, utils
 
@@ -97,12 +100,15 @@ class LinearCompensation(Task):
         self._log.debug(f"Channel weights: {self._channel_weights}")
         self._log.debug(f"Controls abundance AU: {self._controls_abundance_AU}")
 
+        metrics = self._compute_metrics()
+
         return Context(
             autofluorescence=self._autofluorescence,
             spillover_matrix=self._spillover_matrix,
             channel_weights=self._channel_weights,
             controls_abundances_AU=self._controls_abundance_AU,
             F_mat=self._generate_function_matrix(),
+            metrics=metrics,
         )
 
     def _compute_channel_weights(self) -> np.ndarray:
@@ -173,7 +179,11 @@ class LinearCompensation(Task):
                         w = weights[:, j]
                         x = prot_values[:, ref_chan]
                         y = prot_values[:, j]
-                        S[i, j] = np.sum(w * x * y) / np.sum(w * x * x)
+                        denom = np.sum(w * x * x)
+                        if denom > 0:
+                            S[i, j] = np.sum(w * x * y) / denom
+                        else:
+                            S[i, j] = 0.0
 
             else:  # simple least squares
                 ref_values = prot_values[:, ref_chan]
@@ -181,7 +191,11 @@ class LinearCompensation(Task):
                     if j == ref_chan:
                         S[i, j] = 1.0
                     else:
-                        S[i, j] = np.sum(ref_values * prot_values[:, j]) / np.sum(ref_values**2)
+                        denom = np.sum(ref_values**2)
+                        if denom > 0:
+                            S[i, j] = np.sum(ref_values * prot_values[:, j]) / denom
+                        else:
+                            S[i, j] = 0.0
 
         return np.clip(S, 0, None)  # ensure non-negative
 
@@ -226,6 +240,142 @@ class LinearCompensation(Task):
             return lin_fun
 
         return [[make_lin_fun(a) for a in row] for row in self._spillover_matrix]
+
+    def _compute_residual_nonlinearity(self, x_ref, y_off_target, n_bins=20):
+        valid = np.isfinite(x_ref) & np.isfinite(y_off_target)
+        if np.sum(valid) < 100:
+            return np.nan
+        x, y = x_ref[valid], y_off_target[valid]
+        percentiles = np.linspace(5, 95, n_bins + 1)
+        bin_edges = np.percentile(x, percentiles)
+        bin_means = []
+        for i in range(n_bins):
+            mask = (x >= bin_edges[i]) & (x < bin_edges[i + 1])
+            if np.sum(mask) > 10:
+                bin_means.append(np.median(y[mask]))
+        if len(bin_means) < 5:
+            return np.nan
+        bin_means = np.array(bin_means)
+        y_range = np.percentile(y, 99) - np.percentile(y, 1)
+        if y_range <= 0:
+            return 0.0
+        return float(np.mean(np.abs(bin_means)) / (y_range + 1e-10))
+
+    def _compute_zero_centering_bias(self, y_off_target):
+        valid = np.isfinite(y_off_target)
+        if np.sum(valid) < 100:
+            return np.nan
+        y = y_off_target[valid]
+        median_val = np.median(y)
+        mad = np.median(np.abs(y - median_val))
+        if mad <= 0:
+            return 0.0
+        return float(np.abs(median_val) / (mad + 1e-10))
+
+    def _compute_distribution_smoothness(self, y, n_bins=50):
+        valid = np.isfinite(y)
+        if np.sum(valid) < 100:
+            return np.nan
+        y = y[valid]
+        hist, _ = np.histogram(y, bins=n_bins, density=True)
+        smooth_hist = gaussian_filter1d(hist, sigma=1.5)
+        second_deriv = np.diff(smooth_hist, n=2)
+        return float(np.std(second_deriv) / (np.mean(smooth_hist) + 1e-10))
+
+    def _compute_multimodality_score(self, y, min_prominence_ratio=0.1):
+        valid = np.isfinite(y)
+        if np.sum(valid) < 100:
+            return np.nan
+        y = y[valid]
+        hist, _ = np.histogram(y, bins=100, density=True)
+        smooth_hist = gaussian_filter1d(hist, sigma=2)
+        peaks, properties = find_peaks(smooth_hist, prominence=0)
+        if len(peaks) == 0:
+            return 1
+        max_prominence = np.max(properties['prominences'])
+        significant_peaks = np.sum(properties['prominences'] >= min_prominence_ratio * max_prominence)
+        return int(max(1, significant_peaks))
+
+    def _compute_metrics(self) -> TaskMetrics:
+        metrics = TaskMetrics()
+        S, n_prot = self._spillover_matrix, len(self._protein_names)
+
+        try:
+            cond = float(np.linalg.cond(S))
+        except Exception:
+            cond = np.nan
+        metrics.add('spillover_matrix_condition_number', cond,
+            'Condition number. Lower=better. >10 may indicate instability.', scope='global')
+
+        bleedthrough, total_off_diag, max_off_diag = {}, 0.0, 0.0
+        for pid, prot in enumerate(self._protein_names):
+            ref_idx = self._reference_channels[pid]
+            off_diag = np.delete(S[pid, :], ref_idx) if ref_idx is not None else S[pid, :]
+            off_diag = off_diag[off_diag > 0]
+            bleedthrough[prot] = {
+                'max_spillover': float(np.max(off_diag)) if len(off_diag) > 0 else 0.0,
+                'sum_spillover': float(np.sum(off_diag)),
+                'reference_channel': self._channel_names[ref_idx] if ref_idx is not None else None,
+            }
+            total_off_diag += bleedthrough[prot]['sum_spillover']
+            max_off_diag = max(max_off_diag, bleedthrough[prot]['max_spillover'])
+
+        metrics.add('bleedthrough_per_protein', bleedthrough,
+            'Per-protein: max_spillover, sum_spillover, reference_channel.', scope='individual')
+        metrics.add('mean_total_bleedthrough', float(total_off_diag / n_prot),
+            'Mean off-diagonal spillover. >0.5 is significant.', scope='global')
+        metrics.add('max_single_bleedthrough', float(max_off_diag),
+            'Max spillover coefficient. >0.3 is problematic.', scope='global')
+
+        if hasattr(self, '_controls_abundance_AU') and self._controls_abundance_AU is not None:
+            single_masks = self._controls_masks.sum(axis=1) == 1
+            comp_quality = {}
+            for ctrl_pid, ctrl_prot in enumerate(self._protein_names):
+                prot_mask = single_masks & self._controls_masks[:, ctrl_pid].astype(bool)
+                if not np.any(prot_mask):
+                    continue
+                ctrl_ab = self._controls_abundance_AU[prot_mask]
+                x_ref = ctrl_ab[:, ctrl_pid]
+                comp_quality[ctrl_prot] = {
+                    off_prot: {
+                        'nonlinearity': self._compute_residual_nonlinearity(x_ref, ctrl_ab[:, off_pid]),
+                        'zero_centering_bias': self._compute_zero_centering_bias(ctrl_ab[:, off_pid]),
+                        'distribution_smoothness': self._compute_distribution_smoothness(ctrl_ab[:, off_pid]),
+                        'multimodality': self._compute_multimodality_score(ctrl_ab[:, off_pid]),
+                    }
+                    for off_pid, off_prot in enumerate(self._protein_names) if off_pid != ctrl_pid
+                }
+
+            metrics.add('compensation_quality_per_protein', comp_quality,
+                'Per-protein-pair: nonlinearity (<0.05 good), zero_centering_bias (<0.5 good), multimodality (1=good).', scope='individual')
+
+            all_vals = [(d['nonlinearity'], d['zero_centering_bias'], d['multimodality'])
+                        for pdata in comp_quality.values() for d in pdata.values()]
+            all_nonlin = [v[0] for v in all_vals if not np.isnan(v[0])]
+            all_bias = [v[1] for v in all_vals if not np.isnan(v[1])]
+            all_multi = [v[2] for v in all_vals if not np.isnan(v[2])]
+
+            if all_nonlin:
+                metrics.add('mean_nonlinearity', float(np.mean(all_nonlin)),
+                    'Mean S-curve metric. <0.05 good, >0.1 problematic.', scope='global')
+                metrics.add('max_nonlinearity', float(np.max(all_nonlin)),
+                    'Worst-case S-curve.', scope='global')
+            if all_bias:
+                metrics.add('mean_zero_centering_bias', float(np.mean(all_bias)),
+                    'Mean centering bias. <0.5 good.', scope='global')
+            if all_multi:
+                metrics.add('multimodal_pair_count', sum(1 for m in all_multi if m > 1),
+                    'Pairs with multimodal distributions. 0 is ideal.', scope='global')
+
+            q = [1 - min(max_off_diag * 2, 1), 1 - min(total_off_diag / n_prot, 1)]
+            if all_nonlin:
+                q.append(1 - min(np.mean(all_nonlin) * 10, 1))
+            if all_bias:
+                q.append(1 - min(np.mean(all_bias) / 2, 1))
+            metrics.add('overall_compensation_quality', float(np.mean(q)),
+                'Quality score (0-1). >0.8 good, 0.5-0.8 acceptable, <0.5 needs attention.', scope='global')
+
+        return metrics
 
     def diagnostics(self, ctx: Context, **kw) -> Optional[List[DiagnosticFigure]]:
         if not self.unmix_controls:

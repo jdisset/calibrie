@@ -5,6 +5,7 @@ from jaxopt import GaussNewton
 import matplotlib.patches as patches
 from calibrie.utils import Escaped
 from .pipeline import Task, DiagnosticFigure
+from .metrics import TaskMetrics
 from collections import defaultdict
 from copy import deepcopy
 import jax
@@ -140,13 +141,9 @@ class MEFBeadsTransform(Task):
 
         self._log.debug(f'For beads, using channels: {self.use_channels}')
 
-        self._beads_data_array = utils.load_to_df(self.beads_data, all_chans).values
+        self._beads_data_array = utils.load_to_df(self.beads_data, self.use_channels).values
         if self._beads_data_array.shape[0] == 0:
             raise ValueError('Beads data is empty')
-
-        self._beads_data_array = self._beads_data_array[
-            :, [all_chans.index(c) for c in self.use_channels]
-        ]
 
         self._beads_mef_array = np.array(
             [self.beads_mef_values[self.channel_units[c]] for c in self.use_channels]
@@ -178,16 +175,20 @@ class MEFBeadsTransform(Task):
         self._log.debug('Fitting regressions')
         self.fit_regressions()
 
+        metrics = self._compute_task_metrics()
+
         if self.apply_on_load:
             return Context(
                 cell_data_loader=self.make_loader(ctx.cell_data_loader),
                 transform_to_MEF=self.transform_channels_to_MEF,
                 transform_MEF_to_AU=self.transform_MEF_to_AU,
+                metrics=metrics,
             )
         else:
             return Context(
                 transform_to_MEF=self.transform_channels_to_MEF,
                 transform_MEF_to_AU=self.transform_MEF_to_AU,
+                metrics=metrics,
             )
 
     def load_cells_with_MEF_channels(
@@ -371,6 +372,44 @@ class MEFBeadsTransform(Task):
 
             self._params.append(new_params)
             self._inverse_params.append(new_inverse_params)
+
+    def _compute_task_metrics(self) -> TaskMetrics:
+        metrics = TaskMetrics()
+        n_peaks, n_chan = self._beads_mef_array.shape[0], len(self.use_channels)
+        chan_qual, overlaps, rmses, r2s = {}, [], [], []
+
+        for i, chan in enumerate(self.use_channels):
+            peaks, mef = self._bead_peak_locations[:, i], self._mef_tr[:, i]
+            overlap = float(np.mean(self._overlap[:, i]))
+            overlaps.append(overlap)
+            pred = utils.evaluate_stacked_poly(peaks, self._params[i])
+            resid = pred - mef
+            rmse = float(np.sqrt(np.mean(resid ** 2)))
+            rmses.append(rmse)
+            ss_res, ss_tot = np.sum(resid ** 2), np.sum((mef - np.mean(mef)) ** 2)
+            r2 = float(max(0, 1 - ss_res / ss_tot)) if ss_tot > 0 else 0.0
+            r2s.append(r2)
+            chan_qual[chan] = {'mean_peak_overlap': overlap, 'regression_rmse': rmse,
+                              'regression_r_squared': r2, 'num_peaks_detected': n_peaks}
+
+        metrics.add('channel_calibration_quality', chan_qual,
+            'Per-channel: mean_peak_overlap (lower=better), regression_rmse, regression_r_squared (closer to 1=better).')
+        metrics.add('num_channels_calibrated', n_chan, 'Channels with MEF calibration.', scope='global')
+        metrics.add('num_bead_levels', n_peaks, 'Bead intensity levels used.', scope='global')
+        if overlaps:
+            metrics.add('mean_peak_overlap', float(np.mean(overlaps)),
+                'Mean overlap. Lower=better. >0.3 indicates poor separation.', scope='global')
+            metrics.add('max_peak_overlap', float(np.max(overlaps)), 'Worst-case overlap.', scope='global')
+        if rmses:
+            metrics.add('mean_regression_rmse', float(np.mean(rmses)), 'Mean RMSE. Lower=better.', scope='global')
+            metrics.add('max_regression_rmse', float(np.max(rmses)), 'Worst-fit channel RMSE.', scope='global')
+        if r2s:
+            metrics.add('mean_regression_r2', float(np.mean(r2s)), 'Mean R². Closer to 1=better.', scope='global')
+            metrics.add('min_regression_r2', float(np.min(r2s)), 'Worst R² across channels.', scope='global')
+            quality = float(np.min(r2s)) * (1 - float(np.mean(overlaps)) if overlaps else 1.0)
+            metrics.add('overall_calibration_quality', quality,
+                'MEF calibration quality (0-1). >0.9 excellent, 0.7-0.9 good, <0.7 review.', scope='global')
+        return metrics
 
     def transform_channels_to_MEF(self, x, channel_names: List[str]):
         self._log.debug(f'Calibrating values to MEF, loading channels {channel_names}')

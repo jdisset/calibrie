@@ -116,6 +116,11 @@ class CalibrationProgram(LazyDraconModel):
         Arg(help='If set, only run diagnostics, do not process samples.'),
     ] = False
 
+    no_figures: Annotated[
+        bool,
+        Arg(help='If set, skip generating diagnostic figures but still output metrics.'),
+    ] = False
+
     def build_pipeline(self):
         self._datadir = (Path(self.xpfile).parent / self.datapath).expanduser().resolve()
         self._xpdata = parse_xpfile(self.xpfile)
@@ -217,7 +222,9 @@ class CalibrationProgram(LazyDraconModel):
                     .expanduser()
                     .resolve()
                 )
-            run_and_save_diagnostics(self._resolved_pipeline, diag_output_dir.as_posix())
+            if not self.no_figures:
+                run_and_save_diagnostics(self._resolved_pipeline, diag_output_dir.as_posix())
+            self._resolved_pipeline.save_metrics(diag_output_dir)
 
         # save the full pipeline
         pipeline_dump = dr.dump(self._resolved_pipeline)

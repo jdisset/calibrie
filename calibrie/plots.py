@@ -612,22 +612,32 @@ def make_tr_ax(ax, tr, invtr, xlims=None, ylims=None, skip10=True, margins=0.05)
     ylims_tr = ylims
 
     if xlims is not None:
-        xlims_tr = tr(np.asarray(xlims))
-        xp10, xsub = powers_of_ten(*xlims, skip10=skip10)
-        xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
-        ax.set_xlim(tuple(xlims_margin))
-        ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
-        ax.set_xticks(list(tr(xp10)))
-        ax.set_xticks(list(tr(xsub)), minor=True)
+        xlims = np.asarray(xlims)
+        # Validate xlims
+        if not np.all(np.isfinite(xlims)) or xlims[0] >= xlims[1]:
+            xlims = np.array([-100, 1e6])  # fallback to reasonable defaults
+        xlims_tr = tr(xlims)
+        if np.all(np.isfinite(xlims_tr)) and xlims_tr[0] < xlims_tr[1]:
+            xp10, xsub = powers_of_ten(*xlims, skip10=skip10)
+            xlims_margin = xlims_tr + np.array([-1, 1]) * margins * np.diff(xlims_tr)
+            ax.set_xlim(tuple(xlims_margin))
+            ax.xaxis.set_major_formatter(PowerFormatter(xp10, skip10=skip10))
+            ax.set_xticks(list(tr(xp10)))
+            ax.set_xticks(list(tr(xsub)), minor=True)
 
     if ylims is not None:
-        ylims_tr = tr(np.asarray(ylims))
-        yp10, ysub = powers_of_ten(*ylims, skip10=skip10)
-        ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
-        ax.set_ylim(tuple(ylims_margin))
-        ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
-        ax.set_yticks(list(tr(yp10)))
-        ax.set_yticks(list(tr(ysub)), minor=True)
+        ylims = np.asarray(ylims)
+        # Validate ylims
+        if not np.all(np.isfinite(ylims)) or ylims[0] >= ylims[1]:
+            ylims = np.array([-100, 1e6])  # fallback to reasonable defaults
+        ylims_tr = tr(ylims)
+        if np.all(np.isfinite(ylims_tr)) and ylims_tr[0] < ylims_tr[1]:
+            yp10, ysub = powers_of_ten(*ylims, skip10=skip10)
+            ylims_margin = ylims_tr + np.array([-1, 1]) * margins * np.diff(ylims_tr)
+            ax.set_ylim(tuple(ylims_margin))
+            ax.yaxis.set_major_formatter(PowerFormatter(yp10, skip10=skip10))
+            ax.set_yticks(list(tr(yp10)))
+            ax.set_yticks(list(tr(ysub)), minor=True)
 
     ax.grid(which='major', alpha=0.5, ls='--', lw=0.5)
     return tr, invtr, xlims_tr, ylims_tr
@@ -658,11 +668,31 @@ def density_histogram2d(
     if isinstance(nbins, int):
         nbins = (nbins, nbins)
 
+    # Filter out NaN and Inf values
+    valid_mask = np.isfinite(X) & np.isfinite(Y)
+    X = X[valid_mask]
+    Y = Y[valid_mask]
+
+    # Check if we have enough valid data
+    if len(X) < 2:
+        ax.text(0.5, 0.5, 'Insufficient data', ha='center', va='center', transform=ax.transAxes)
+        return
+
+    # Validate ranges
+    xrange = list(xrange)
+    yrange = list(yrange)
+    if not np.isfinite(xrange[0]) or not np.isfinite(xrange[1]) or xrange[0] >= xrange[1]:
+        xrange = [np.nanmin(X), np.nanmax(X)]
+        if xrange[0] >= xrange[1]:
+            xrange[1] = xrange[0] + 1
+    if not np.isfinite(yrange[0]) or not np.isfinite(yrange[1]) or yrange[0] >= yrange[1]:
+        yrange = [np.nanmin(Y), np.nanmax(Y)]
+        if yrange[0] >= yrange[1]:
+            yrange[1] = yrange[0] + 1
+
     xres = np.abs(np.subtract(*xrange)) / nbins[0]
     yres = np.abs(np.subtract(*yrange)) / nbins[1]
 
-    # X = X + np.random.uniform(size=X.shape) * noise_smooth * xres
-    # Y = Y + np.random.uniform(size=Y.shape) * noise_smooth * yres
     # w normal noise:
     X = X + np.random.normal(size=X.shape) * noise_smooth * xres
     Y = Y + np.random.normal(size=Y.shape) * noise_smooth * yres
@@ -783,6 +813,10 @@ def unmixing_plot(
                     np.concatenate([[ylims_tr[0]], xl, [ylims_tr[1]]]),
                 )
                 mz = np.ones_like(mx) * np.pad(std_ratio, (1, 1), mode='edge')[:, None]
+
+                # Skip pcolormesh if there are NaN or Inf values
+                if np.any(~np.isfinite(mx)) or np.any(~np.isfinite(my)) or np.any(~np.isfinite(mz)):
+                    continue
 
                 # put the colormesh in background
                 cmap = plt.get_cmap('Reds_r')
