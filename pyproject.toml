@@ -34,5 +34,6 @@ dependencies = [
 
 [project.scripts]
 calibrie-gating = "calibrie.scripts.gating_ui:main"
+calibrie-gating-v2 = "calibrie.gating_v2.gating:cli"
 calibrie-run = "calibrie.scripts.run_pipeline:main"
 

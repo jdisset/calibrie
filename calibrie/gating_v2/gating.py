@@ -17,6 +17,15 @@ from calibrie.plots import make_symlog_ax, density_histogram2d
 from calibrie.utils import Context, escape_name, add_calibration_metadata, load_to_df
 from declair_ui import UI, ClientComputed, render
 from declair_ui.client_runnable import client_runnable
+from calibrie.fcs_utils import (
+    escape_name,
+    parse_fcs_data,
+    parse_fcs_meta,
+    _parse_header,
+    _parse_text_segment,
+    _parse_int,
+    _bytes_from_pnb,
+)
 from declair_ui.layout import Cols, Panel, Rows, Sidebar, UIConfig
 from declair_ui.widgets import ColorPicker, DensityPlot, Dropdown, FileList, PolygonDrawer, TreeList
 
@@ -90,9 +99,10 @@ class DataFile(BaseModel):
     path: str
     point_count: int = 0
     visible: bool = True
+    group: str | None = None
     channels: list[str] = Field(default_factory=list)
     preview_data: list[list[float]] | None = Field(default=None)
-    preview_data_packed: dict | None = Field(default=None)
+    data_packed: dict | None = Field(default=None)
 
     @computed_field
     @property
@@ -100,66 +110,119 @@ class DataFile(BaseModel):
         return self.path.rsplit("/", 1)[-1] if "/" in self.path else self.path
 
 
-@client_runnable(helpers=[escape_name], packages=["numpy", "pydantic"])
-def load_fcs_preview(file_bytes: bytes, filename: str, report_progress=None) -> DataFile:
-    import fcsparser
-    import numpy as np
-    import base64
-
-    if report_progress:
-        report_progress(0.1, "Parsing header...")
-    with open(f"/tmp/{filename}", "wb") as f:
-        f.write(file_bytes)
-    if report_progress:
-        report_progress(0.3, "Decoding events...")
-    _, data = fcsparser.parse(f"/tmp/{filename}", reformat_meta=True)
-    if report_progress:
-        report_progress(0.7, "Packing preview...")
-    arr = data.to_numpy(dtype=np.float32, copy=False)
-    packed = {
-        "data_b64": base64.b64encode(arr.tobytes()).decode("ascii"),
-        "shape": [int(arr.shape[0]), int(arr.shape[1])],
+@client_runnable(
+    helpers=[
+        escape_name,
+        _parse_int,
+        _parse_header,
+        _parse_text_segment,
+        parse_fcs_meta,
+        _bytes_from_pnb,
+        parse_fcs_data,
+    ],
+    packages=["numpy"],
+)
+def load_fcs_data(file_bytes: bytes, filename: str, report_progress=None) -> dict:
+    result = parse_fcs_data(file_bytes, report_progress=report_progress)
+    return {
+        "path": filename,
+        "point_count": int(result["point_count"]),
+        "channels": result["channels"],
+        "preview_data": None,
+        "data_packed": result["data_packed"],
+        "visible": True,
     }
-    if report_progress:
-        report_progress(0.95, "Finalizing...")
-    return DataFile(
-        path=filename,
-        point_count=len(data),
-        channels=[escape_name(c) for c in data.columns],
-        preview_data=None,
-        preview_data_packed=packed,
-        visible=True,
-    )
 
 
-load_fcs_preview.supports_progress = True
+load_fcs_data.supports_progress = True
 
 
 @client_runnable
 def compute_plot_data(files: list[dict], xaxis: str, yaxis: str) -> dict:
-    """Compute multi-source plot data client-side from cached file data."""
+    """Compute multi-source plot data client-side from cached file data.
+
+    Files are grouped by their 'group' field. Files without a group are
+    merged into a single "All Files" source.
+
+    Supports both binary transfer (preview_data_binary with numpy array) and
+    legacy JSON transfer (preview_data with nested arrays).
+
+    Display resampling is handled by the UI layer (perSourceMaxPoints).
+    """
     import numpy as np
 
     if not xaxis or not yaxis:
         return {}
-    sources = []
+
+    default_group = "All Files"
+    grouped: dict[str, dict] = {}
+    group_order: list[str] = []
+
     for f in files:
-        if not f.get("visible", True) or not f.get("preview_data") or not f.get("channels"):
+        if not f.get("visible", True) or not f.get("channels"):
             continue
         channels = f["channels"]
         if xaxis not in channels or yaxis not in channels:
             continue
-        xi, yi = channels.index(xaxis), channels.index(yaxis)
-        data = f["preview_data"]
-        arr = np.asarray(data, dtype=np.float64)
-        if arr.ndim != 2 or arr.shape[1] <= max(xi, yi):
-            continue
-        # JS pre-samples to <= 1M points when possible; keep as fallback.
-        x = arr[:, xi].tolist()
-        y = arr[:, yi].tolist()
-        name = f.get("path", "").rsplit("/", 1)[-1]
-        name = name.rsplit(".", 1)[0] if "." in name else name
-        sources.append({"x": x, "y": y, "label": name})
+
+        # Try binary format first (zero-copy transfer from JS)
+        binary = f.get("preview_data_binary")
+        if binary is not None:
+            arr = None
+            # Handle direct numpy array
+            if isinstance(binary, np.ndarray):
+                arr = binary
+            else:
+                # Handle JsProxy object with data/shape fields (attribute access)
+                bin_data = getattr(binary, "data", None)
+                bin_shape = getattr(binary, "shape", None)
+                # Fallback to dict-style access
+                if bin_data is None and hasattr(binary, "get"):
+                    bin_data = binary.get("data")
+                    bin_shape = binary.get("shape")
+                # Fallback to subscript access
+                if bin_data is None:
+                    try:
+                        bin_data = binary["data"]
+                        bin_shape = binary["shape"]
+                    except (KeyError, TypeError):
+                        pass
+                if bin_data is not None:
+                    arr = np.asarray(bin_data, dtype=np.float32)
+                    if bin_shape:
+                        shape_list = list(bin_shape) if hasattr(bin_shape, "__iter__") else bin_shape
+                        arr = arr.reshape(shape_list)
+            if arr is not None and arr.ndim == 2 and arr.shape[1] == 2:
+                x, y = arr[:, 0], arr[:, 1]
+            else:
+                continue
+        else:
+            # Fall back to legacy JSON format
+            data = f.get("preview_data")
+            if not data:
+                continue
+            xi, yi = channels.index(xaxis), channels.index(yaxis)
+            arr = np.asarray(data, dtype=np.float64)
+            if arr.ndim != 2 or arr.shape[1] <= max(xi, yi):
+                continue
+            x, y = arr[:, xi], arr[:, yi]
+
+        group = f.get("group") or ""
+        key = group.strip() if isinstance(group, str) and group.strip() else default_group
+
+        if key not in grouped:
+            grouped[key] = {"x": [], "y": [], "label": key}
+            group_order.append(key)
+        grouped[key]["x"].append(x)
+        grouped[key]["y"].append(y)
+
+    sources = []
+    for key in group_order:
+        grp = grouped[key]
+        x_all = np.concatenate(grp["x"]) if grp["x"] else np.array([])
+        y_all = np.concatenate(grp["y"]) if grp["y"] else np.array([])
+        sources.append({"x": x_all.tolist(), "y": y_all.tolist(), "label": grp["label"]})
+
     return {"sources": sources} if sources else {}
 
 
@@ -167,9 +230,21 @@ class PolygonGate(BaseModel):
     name: str = "Gate"
     xchannel: Chan = ""
     ychannel: Chan = ""
-    vertices: Annotated[list[tuple[float, float]], UI(PolygonDrawer(), uses="main-plot")] = Field(
-        default_factory=list
-    )
+    vertices: Annotated[
+        list[tuple[float, float]],
+        UI(
+            PolygonDrawer(
+                selection_field="selected_gate_index",
+                color_field="color",
+                stats_function="compute_gate_statistics",
+                stats_primary_field="count",
+                stats_secondary_field="percent_of_parent",
+                stats_primary_label="events",
+                stats_secondary_label="% of parent",
+            ),
+            uses="main-plot",
+        ),
+    ] = Field(default_factory=list)
     color: Annotated[tuple[int, int, int, int], UI(ColorPicker())] = (100, 200, 255, 200)
     applied: bool = False
     parent_gate: str | None = None
@@ -206,7 +281,17 @@ class GatingTask(Task):
     target_population: str | None = None
 
     files: Annotated[
-        list[DataFile], UI(FileList(file_processor=load_fcs_preview, badge_field="point_count", cache_fields=["preview_data"]))
+        list[DataFile], UI(FileList(
+            file_processor=load_fcs_data,
+            badge_field="point_count",
+            visibility_field="visible",
+            cache_fields=["data_packed"],
+            group_field="group",
+            group_label="Group",
+            group_mode="sections",
+            ungrouped_label="All Files",
+            file_extensions=[".fcs"],
+        ))
     ] = Field(default_factory=list, exclude=True)
     xaxis: Annotated[Chan, UI(label="X Channel")] = Field(default="", exclude=True)
     yaxis: Annotated[Chan, UI(label="Y Channel")] = Field(default="", exclude=True)
