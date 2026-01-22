@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 ## {{{                          --     import     --
@@ -859,7 +859,7 @@ def points_in_polygon(polygon, pts):
 
 
 class PolygonGate(Component):
-    vertices: List[List[float]] = []
+    vertices: List[List[float]] = Field(default_factory=list)
     name: Annotated[str, make_ui_field(TextUI, width=150)] = ''
     xchannel: Annotated[
         str, make_ui_field(DropdownUI, get_available_items=lambda: list(AVAILABLE_AXIS), width=120)
@@ -867,6 +867,7 @@ class PolygonGate(Component):
     ychannel: Annotated[
         str, make_ui_field(DropdownUI, get_available_items=lambda: list(AVAILABLE_AXIS), width=100)
     ]
+    parent_gate: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
@@ -1050,7 +1051,8 @@ class GatingTask(Task, Component):
             item_type=PolygonGate,
             on_add_callback=lambda self, g: self._new_gate_added(g),
         ),
-    ] = []
+    ] = Field(default_factory=list)
+    target_population: Optional[str] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, validate_default=True)
 
@@ -1078,18 +1080,39 @@ class GatingTask(Task, Component):
         return Context(cell_data_loader=self.load_cells)
 
     def load_cells(self, data, column_order=None) -> Any:
-        # first load with all columns, and apply the gates
         df = calibrie.utils.load_to_df(data)
         prev_n_rows = len(df)
-        df = self.apply_all_gates(df)
-        n_rows = len(df)
 
+        if self.target_population is not None:
+            from calibrie.gating_v2.models import GatingSession, PolygonGate as V2PolygonGate
+            v2_gates = [
+                V2PolygonGate(
+                    name=g.name,
+                    xchannel=g.xchannel,
+                    ychannel=g.ychannel,
+                    vertices=[tuple(v) for v in g.vertices],
+                    parent_gate=getattr(g, 'parent_gate', None),
+                )
+                for g in self.gates
+            ]
+            session = GatingSession(gates=v2_gates)
+            errors = session.validate_hierarchy()
+            if errors:
+                raise ValueError(f"Invalid gate hierarchy: {'; '.join(errors)}")
+            data_dict = {col: df[col].values for col in df.columns}
+            mask = session.get_population_mask(self.target_population, data_dict)
+            df = df[mask]
+        else:
+            df = self.apply_all_gates(df)
+
+        n_rows = len(df)
         add_calibration_metadata(
             df,
             self._name,
             {
                 'n_before_gating': prev_n_rows,
                 'n_after_gating': n_rows,
+                'target_population': self.target_population,
             },
         )
         print(f"LOADER--gating: Loaded {prev_n_rows} -> {n_rows} cells")

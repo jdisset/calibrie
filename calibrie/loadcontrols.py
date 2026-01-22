@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 """
@@ -11,9 +11,13 @@ from typing import List, Dict, Tuple, Optional
 from . import utils as ut
 from calibrie.utils import LoadedData, Context
 import numpy as np
-import jax.numpy as jnp
 from . import plots, utils
+import re
 from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
+from matplotlib.colors import LogNorm
+from matplotlib.axes import Axes
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import logging
 
 _VALID_BLANK_NAMES = ['BLANK', 'EMPTY', 'INERT', 'CNTL']
@@ -143,7 +147,7 @@ class ChannelMetrics:
     def get_all_metrics(self):
         """Return all metrics in a format suitable for plotting."""
         metrics = []
-        for pid, prot in enumerate(self.protein_names):
+        for prot in self.protein_names:
             if prot not in self.signal_strengths:
                 continue
 
@@ -184,6 +188,388 @@ class ChannelMetrics:
         }
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Channel Quality Dashboard Rendering Helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Channels to always exclude from quality metrics display
+_EXCLUDED_CHANNEL_PATTERNS = [
+    re.compile(r'^TIME$', re.IGNORECASE),
+    re.compile(r'^FSC', re.IGNORECASE),
+    re.compile(r'^SSC', re.IGNORECASE),
+]
+
+
+def _filter_display_channels(channel_names: list[str]) -> tuple[list[str], list[int]]:
+    """Filter out TIME, FSC*, SSC* channels. Returns (filtered_names, kept_indices)."""
+    kept = []
+    for i, ch in enumerate(channel_names):
+        exclude = any(pat.match(ch) for pat in _EXCLUDED_CHANNEL_PATTERNS)
+        if not exclude:
+            kept.append(i)
+    return [channel_names[i] for i in kept], kept
+
+
+def _compute_quality_grades(
+    metrics: ChannelMetrics,
+    reference_channels: list[int],
+    display_channel_indices: list[int] | None = None,
+) -> dict[str, tuple[str, float, str, dict]]:
+    """Compute A/B/C/F grade per protein using only displayed (non-excluded) channels.
+
+    Returns protein -> (grade, score, best_display_chan_name, details).
+    """
+    grades = {}
+
+    # Get list of display channel names
+    if display_channel_indices is not None:
+        display_chans = [metrics.channel_names[i] for i in display_channel_indices]
+    else:
+        display_chans = metrics.channel_names
+
+    for prot in metrics.protein_names:
+        if prot not in metrics.signal_to_noise:
+            grades[prot] = ('F', 0.0, '?', {})
+            continue
+
+        # Find best channel among displayed channels (by specificity)
+        best_chan, best_spec, best_snr, best_dyn = None, -1, 0, 0
+        for chan in display_chans:
+            if chan in metrics.specificities[prot]:
+                spec = metrics.specificities[prot][chan]
+                if spec > best_spec:
+                    best_spec = spec
+                    best_snr = metrics.signal_to_noise[prot].get(chan, 0)
+                    best_dyn = metrics.dynamic_ranges[prot].get(chan, 0)
+                    best_chan = chan
+
+        if best_chan is None:
+            grades[prot] = ('F', 0.0, '?', {})
+            continue
+
+        # Grade based on specificity (primary) and SNR (secondary)
+        if best_spec >= 3.0 and best_snr >= 2.0:
+            grade, score = 'A', 1.0
+        elif best_spec >= 1.5 and best_snr >= 1.0:
+            grade, score = 'B', 0.7
+        elif best_spec >= 0.8:
+            grade, score = 'C', 0.4
+        else:
+            grade, score = 'F', 0.15
+
+        grades[prot] = (
+            grade,
+            score,
+            best_chan,
+            {'snr': best_snr, 'spec': best_spec, 'dyn': best_dyn},
+        )
+
+    return grades
+
+
+def _render_summary_bar(
+    ax: Axes,
+    grades: dict[str, tuple[str, float, str, dict]],
+    spec_vmin: float = 0.1,
+    spec_vmax: float = 10.0,
+    fontsize: int = 11,
+):
+    """Render protein quality summary as colored boxes using inferno colormap."""
+    n = len(grades)
+    if n == 0:
+        ax.axis('off')
+        return
+
+    proteins = list(grades.keys())
+    box_width = 1.0
+    ax.set_xlim(0, n * box_width)
+    ax.set_ylim(0, 1)
+
+    norm = LogNorm(vmin=spec_vmin, vmax=spec_vmax, clip=True)
+    cmap = plt.get_cmap('inferno')
+
+    for i, prot in enumerate(proteins):
+        grade, score, ref_chan, details = grades[prot]
+        spec_val = details.get('spec', 0.1)
+        norm_val = norm(max(spec_val, spec_vmin))
+        color = cmap(norm_val)
+
+        # Draw box colored by specificity (same colormap as heatmap)
+        ax.add_patch(
+            plt.Rectangle(
+                (i * box_width, 0.05),
+                box_width * 0.95,
+                0.90,
+                facecolor=color,
+                edgecolor='#333',
+                linewidth=1.5,
+                alpha=0.9,
+            )
+        )
+
+        # Text color based on brightness
+        text_color = 'black' if norm_val > 0.5 else 'white'
+        ax.text(
+            i * box_width + box_width / 2,
+            0.72,
+            f'{prot}',
+            ha='center',
+            va='center',
+            fontsize=fontsize,
+            fontweight='bold',
+            color=text_color,
+        )
+        ax.text(
+            i * box_width + box_width / 2,
+            0.45,
+            f'{grade} │ {ref_chan}',
+            ha='center',
+            va='center',
+            fontsize=fontsize - 2,
+            color=text_color,
+            alpha=0.85,
+        )
+        ax.text(
+            i * box_width + box_width / 2,
+            0.20,
+            f'spec={spec_val:.2f}',
+            ha='center',
+            va='center',
+            fontsize=fontsize - 3,
+            color=text_color,
+            alpha=0.7,
+        )
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title(
+        'Protein Quality Summary', fontsize=fontsize + 1, fontweight='bold', loc='left', pad=4
+    )
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
+def _render_specificity_heatmap(
+    ax: Axes,
+    spec_data: np.ndarray,
+    dynrange_data: np.ndarray,
+    sat_data: np.ndarray | None,
+    row_labels: list[str],
+    col_labels: list[str],
+    reference_markers: list[int] | None = None,
+    fontsize: int = 10,
+):
+    """Render specificity heatmap with dynamic range bars and saturation indicators."""
+    n_prot, n_chan = spec_data.shape
+
+    # Use log scale for specificity
+    vmin, vmax = 0.1, max(10.0, np.nanmax(spec_data))
+    norm = LogNorm(vmin=vmin, vmax=vmax, clip=True)
+
+    im = ax.imshow(spec_data, cmap='inferno', norm=norm, aspect='auto', interpolation='nearest')
+
+    # Grid
+    ax.set_xticks(np.arange(n_chan) + 0.5, minor=True)
+    ax.set_yticks(np.arange(n_prot) + 0.5, minor=True)
+    ax.grid(which='minor', color='white', linewidth=1.5, alpha=0.8)
+    ax.tick_params(which='minor', bottom=False, left=False)
+
+    # Labels
+    ax.set_xticks(np.arange(n_chan))
+    ax.set_yticks(np.arange(n_prot))
+    ax.set_xticklabels(col_labels, rotation=45, ha='right', fontsize=fontsize)
+    ax.set_yticklabels(row_labels, fontsize=fontsize + 1)
+    ax.set_title(
+        'Specificity (Signal / Crosstalk)', fontsize=fontsize + 3, fontweight='bold', pad=10
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    # Colorbar
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='3%', pad=0.08)
+    cbar = ax.figure.colorbar(im, cax=cax)
+    cbar.ax.tick_params(labelsize=fontsize - 1)
+
+    # Pre-compute best and 2nd best per row
+    best_per_row = []
+    second_per_row = []
+    for y in range(n_prot):
+        row_specs = [(x, spec_data[y, x]) for x in range(n_chan) if not np.isnan(spec_data[y, x])]
+        row_specs.sort(key=lambda t: t[1], reverse=True)
+        best_per_row.append(row_specs[0][0] if len(row_specs) > 0 else None)
+        second_per_row.append(row_specs[1][0] if len(row_specs) > 1 else None)
+
+    # Cell annotations: specificity value + dynamic range bar + saturation warning
+    dyn_min, dyn_max = np.nanmin(dynrange_data), np.nanmax(dynrange_data)
+    dyn_range = max(dyn_max - dyn_min, 1.0)
+
+    for y in range(n_prot):
+        for x in range(n_chan):
+            spec_val = spec_data[y, x]
+            dyn_val = dynrange_data[y, x]
+            if np.isnan(spec_val):
+                continue
+
+            norm_spec = norm(spec_val)
+            base_color = 'white' if norm_spec < 0.5 else 'black'
+
+            # Reference channel marker
+            is_ref = reference_markers is not None and x == reference_markers[y]
+            if is_ref:
+                base_color = '#00ff00' if norm_spec < 0.5 else '#004400'
+
+            # Main text: specificity value (2 decimal places)
+            txt = f'{spec_val:.2f}' if spec_val < 100 else f'{spec_val:.1f}'
+            if is_ref:
+                txt += ' ★'
+            ax.text(
+                x,
+                y - 0.15,
+                txt,
+                ha='center',
+                va='center',
+                color=base_color,
+                fontsize=fontsize - 1,
+                fontweight='bold',
+            )
+
+            # Best/2nd best label
+            if x == best_per_row[y]:
+                ax.text(
+                    x,
+                    y + 0.38,
+                    'best',
+                    ha='center',
+                    va='center',
+                    color=base_color,
+                    fontsize=fontsize - 3,
+                    fontstyle='italic',
+                    alpha=0.8,
+                )
+            elif x == second_per_row[y]:
+                ax.text(
+                    x,
+                    y + 0.38,
+                    '2nd',
+                    ha='center',
+                    va='center',
+                    color=base_color,
+                    fontsize=fontsize - 3,
+                    fontstyle='italic',
+                    alpha=0.6,
+                )
+
+            # Dynamic range bar (small horizontal bar below value)
+            bar_width = 0.7 * (dyn_val - dyn_min) / dyn_range
+            bar_left = x - 0.35
+            bar_color = '#aaaaaa' if norm_spec < 0.5 else '#555555'
+            ax.plot(
+                [bar_left, bar_left + bar_width],
+                [y + 0.2, y + 0.2],
+                color=bar_color,
+                linewidth=3,
+                solid_capstyle='round',
+                alpha=0.7,
+            )
+
+            # Saturation warning (red dot if >1% saturated)
+            if sat_data is not None and sat_data[y, x] > 0.01:
+                ax.plot(x + 0.35, y - 0.35, 'o', color='red', markersize=5, alpha=0.8)
+
+    # Dynamic range legend (bottom-left)
+    legend_y = n_prot - 0.3
+    legend_x_start = -0.8
+    ax.text(
+        legend_x_start,
+        legend_y + 0.15,
+        'Dyn. range:',
+        fontsize=fontsize - 2,
+        ha='right',
+        va='center',
+        color='#666666',
+    )
+    ax.plot(
+        [legend_x_start + 0.05, legend_x_start + 0.25],
+        [legend_y + 0.15, legend_y + 0.15],
+        color='#888888',
+        linewidth=3,
+        solid_capstyle='round',
+    )
+    ax.text(
+        legend_x_start + 0.35,
+        legend_y + 0.15,
+        f'{dyn_min:.1f}–{dyn_max:.1f}',
+        fontsize=fontsize - 2,
+        ha='left',
+        va='center',
+        color='#666666',
+    )
+
+    return im
+
+
+def _render_correlation_panel(
+    ax: Axes,
+    correlations: dict[str, np.ndarray],
+    channel_names: list[str],
+    channel_indices: list[int] | None = None,
+    fontsize: int = 9,
+):
+    """Render correlation matrices as side-by-side heatmaps with full channel labels."""
+    proteins = [
+        p for p in correlations.keys() if correlations[p] is not None and correlations[p].size > 0
+    ]
+    n_prot = len(proteins)
+
+    if n_prot == 0:
+        ax.text(0.5, 0.5, 'No correlation data', ha='center', va='center', fontsize=fontsize + 2)
+        ax.axis('off')
+        return
+
+    ax.axis('off')
+
+    # Calculate layout: each protein gets equal horizontal space
+    gap = 0.03
+    panel_width = (1.0 - gap * (n_prot + 1)) / n_prot
+
+    for pid, prot in enumerate(proteins):
+        corr_mat = correlations[prot]
+
+        # Filter to display channels only
+        if channel_indices is not None:
+            corr_mat = corr_mat[np.ix_(channel_indices, channel_indices)]
+
+        left = gap + pid * (panel_width + gap)
+        inset_ax = ax.inset_axes((left, 0.12, panel_width, 0.78))
+
+        im = inset_ax.imshow(corr_mat, cmap='RdBu', vmin=-1, vmax=1, aspect='equal')
+
+        # Channel labels
+        display_names = channel_names
+        inset_ax.set_xticks(np.arange(len(display_names)))
+        inset_ax.set_yticks(np.arange(len(display_names)))
+        inset_ax.set_xticklabels(display_names, fontsize=fontsize - 1, rotation=90, ha='center')
+        inset_ax.set_yticklabels(display_names, fontsize=fontsize - 1)
+
+        inset_ax.set_title(prot, fontsize=fontsize + 1, fontweight='bold', pad=4)
+
+        for spine in inset_ax.spines.values():
+            spine.set_linewidth(0.5)
+            spine.set_color('#888888')
+
+        # Add colorbar only for last panel
+        if pid == n_prot - 1:
+            cbar_ax = ax.inset_axes((left + panel_width + 0.01, 0.12, 0.015, 0.78))
+            ax.figure.colorbar(im, cax=cbar_ax)
+            cbar_ax.tick_params(labelsize=fontsize - 2)
+
+    ax.set_title(
+        'Channel Correlations', fontsize=fontsize + 2, fontweight='bold', y=0.98, loc='left'
+    )
+
+
 class LoadControls(Task):
     """
     Task for loading single, multi and no-protein controls from a list of files.
@@ -216,7 +602,7 @@ class LoadControls(Task):
         """
         if self.use_reference_channels is not None:
             user_provided = []
-            for pid, p in enumerate(self._protein_names):
+            for p in self._protein_names:
                 if p in self.use_reference_channels.keys():
                     ch = self.use_reference_channels[p]
                     assert ch in self._channel_names, f'Unknown channel {ch} in reference_channels'
@@ -344,9 +730,9 @@ class LoadControls(Task):
         self._all_channel_names = list(list(self._controls_full.values())[0].columns)
 
         assert len(self._channel_names) > 0, "No channels found in the provided controls"
-        assert all(
-            [len(c.columns) == len(self._channel_names) for c in self._controls.values()]
-        ), "All controls must have the same number of channels"
+        assert all([len(c.columns) == len(self._channel_names) for c in self._controls.values()]), (
+            "All controls must have the same number of channels"
+        )
 
         controls_order = sorted(list(self._controls.keys()))
         self._protein_names = sorted(
@@ -367,15 +753,15 @@ class LoadControls(Task):
             self._controls_full
         )
 
-        assert (
-            self._controls_values.shape[0] == self._controls_masks.shape[0]
-        ), "Mismatch between values and masks"
-        assert (
-            len(self._protein_names) == self._controls_masks.shape[1]
-        ), "Mismatch between masks and protein names"
-        assert self._controls_values.shape[1] == len(
-            self._channel_names
-        ), "Mismatch between values and channel names"
+        assert self._controls_values.shape[0] == self._controls_masks.shape[0], (
+            "Mismatch between values and masks"
+        )
+        assert len(self._protein_names) == self._controls_masks.shape[1], (
+            "Mismatch between masks and protein names"
+        )
+        assert self._controls_values.shape[1] == len(self._channel_names), (
+            "Mismatch between values and channel names"
+        )
 
         self._log.debug(f"Loaded {self._controls_values.shape[0]} events")
 
@@ -387,7 +773,7 @@ class LoadControls(Task):
         self._reference_channels = self.pick_reference_channels()
         self._log.debug(f"Reference channels: {self._reference_channels}")
         self._log.debug(
-            f"Using {len(self._channel_names)} channels: {self._channel_names[:8]}{f'+{len(self._channel_names)-8}' if len(self._channel_names)>8 else ''}"
+            f"Using {len(self._channel_names)} channels: {self._channel_names[:8]}{f'+{len(self._channel_names) - 8}' if len(self._channel_names) > 8 else ''}"
         )
 
         # compute metrics for both filtered and full data
@@ -449,35 +835,64 @@ class LoadControls(Task):
                 'reference_snr': float(channel_metrics.signal_to_noise[prot][ref_chan]),
                 'reference_specificity': float(channel_metrics.specificities[prot][ref_chan]),
                 'reference_dynamic_range': float(channel_metrics.dynamic_ranges[prot][ref_chan]),
-                'reference_dominance': float(snr_vals[0] / snr_vals[1]) if len(snr_vals) > 1 and snr_vals[1] > 0 else float('inf'),
+                'reference_dominance': float(snr_vals[0] / snr_vals[1])
+                if len(snr_vals) > 1 and snr_vals[1] > 0
+                else float('inf'),
             }
-        metrics.add('channel_quality_per_protein', quality,
-            'Per-protein: reference_snr, reference_specificity, reference_dynamic_range, reference_dominance.', scope='individual')
+        metrics.add(
+            'channel_quality_per_protein',
+            quality,
+            'Per-protein: reference_snr, reference_specificity, reference_dynamic_range, reference_dominance.',
+            scope='individual',
+        )
 
         single = self._controls_masks.sum(axis=1) == 1
         events = {
             'blank_events': int(np.sum(~np.any(self._controls_masks, axis=1))),
             'all_color_events': int(np.sum(np.all(self._controls_masks, axis=1))),
             'total_events': int(self._controls_values.shape[0]),
-            **{f'{p}_single_events': int(np.sum(single & self._controls_masks[:, i].astype(bool))) for i, p in enumerate(self._protein_names)}
+            **{
+                f'{p}_single_events': int(np.sum(single & self._controls_masks[:, i].astype(bool)))
+                for i, p in enumerate(self._protein_names)
+            },
         }
         metrics.add('event_counts', events, 'Events per control type.', scope='individual')
 
         snr = [d['reference_snr'] for d in quality.values()]
         spec = [d['reference_specificity'] for d in quality.values()]
-        dom = [d['reference_dominance'] for d in quality.values() if d['reference_dominance'] != float('inf')]
+        dom = [
+            d['reference_dominance']
+            for d in quality.values()
+            if d['reference_dominance'] != float('inf')
+        ]
 
         if snr:
-            metrics.add('min_reference_snr', float(np.min(snr)), 'Min SNR. <1 is weak.', scope='global')
+            metrics.add(
+                'min_reference_snr', float(np.min(snr)), 'Min SNR. <1 is weak.', scope='global'
+            )
             metrics.add('mean_reference_snr', float(np.mean(snr)), 'Mean SNR.', scope='global')
         if dom:
-            metrics.add('min_reference_dominance', float(np.min(dom)), 'Min dominance. >2 good, <1.5 uncertain.', scope='global')
+            metrics.add(
+                'min_reference_dominance',
+                float(np.min(dom)),
+                'Min dominance. >2 good, <1.5 uncertain.',
+                scope='global',
+            )
         if spec:
-            metrics.add('min_reference_specificity', float(np.min(spec)), 'Min specificity. <1 is high crosstalk.', scope='global')
-        metrics.add('num_proteins', len(self._protein_names), 'Proteins in calibration.', scope='global')
+            metrics.add(
+                'min_reference_specificity',
+                float(np.min(spec)),
+                'Min specificity. <1 is high crosstalk.',
+                scope='global',
+            )
+        metrics.add(
+            'num_proteins', len(self._protein_names), 'Proteins in calibration.', scope='global'
+        )
         metrics.add('num_channels', len(self._channel_names), 'Channels used.', scope='global')
         metrics.add('protein_names', list(self._protein_names), 'List of proteins.', scope='global')
-        metrics.add('channel_names', list(self._channel_names), 'List of channels used.', scope='global')
+        metrics.add(
+            'channel_names', list(self._channel_names), 'List of channels used.', scope='global'
+        )
         return metrics
 
     def _process_controls(self, controls):
@@ -511,13 +926,13 @@ class LoadControls(Task):
         self,
         ctx: Context,
         marker_color: str = 'blue',
-        marker_size: int = 40,
         show_all_channels: bool = True,
+        show_correlations: bool = True,
         **kw,
     ) -> Optional[List[DiagnosticFigure]]:
         figures = []
 
-        # remove copied keys from kw
+        # Raw channels to reference plot
         kw2 = {
             k: v
             for k, v in kw.items()
@@ -538,10 +953,9 @@ class LoadControls(Task):
             protein_names=self._diag_protein_names,
             **kw2,
         )
-
         figures.append(DiagnosticFigure(fig=f, name='Raw channels to reference'))
 
-        # use appropriate metrics based on whether we're showing all channels
+        # Get metrics
         metrics = (
             self._metrics_full
             if show_all_channels
@@ -552,77 +966,118 @@ class LoadControls(Task):
                 ctx['protein_names'],
             )
         )
-        # channel_names = self._all_channel_names if show_all_channels else ctx['channel_names']
-        channel_names = self._all_channel_names if show_all_channels else self._diag_channel_names
+
+        all_channel_names = (
+            self._all_channel_names if show_all_channels else self._diag_channel_names
+        )
         protein_names = self._diag_protein_names
-
-        # create quality metrics plot
-        metrics_data = metrics.get_all_metrics()
-
-        # convert metrics to arrays for plotting
-        metrics_array = np.array(
-            [[m[key] for m in metrics_data] for key in ['crosstalk', 'snr', 'specificity']]
+        reference_channels = (
+            self._diag_reference_channels
+            if show_all_channels
+            else ctx.get('reference_channels', self._diag_reference_channels)
         )
 
-        axratio = len(channel_names) / len(ctx['protein_names'])
-        fig, axes = plt.subplots(3, 1, figsize=(20 * axratio, 15))
-        fig.suptitle('Channel Quality Metrics', fontsize=16, y=1)
+        # Filter out TIME, FSC*, SSC* channels for display
+        display_channels, display_indices = _filter_display_channels(all_channel_names)
+        n_prot, n_disp_chan = len(protein_names), len(display_channels)
 
-        titles = [
-            'Cross-talk (Z-score): how much signal is picked up from other proteins',
-            'Signal-to-Noise Ratio',
-            'Specificity (Signal/Cross-talk)',
-        ]
+        # Map reference channels to display indices
+        ref_to_display = []
+        for ref_idx in reference_channels:
+            if ref_idx in display_indices:
+                ref_to_display.append(display_indices.index(ref_idx))
+            else:
+                ref_to_display.append(None)
 
-        for i, (ax, title) in enumerate(zip(axes.flat, titles)):
-            # data = metrics_array[i].reshape(len(ctx['protein_names']), len(channel_names))
-            data = metrics_array[i].reshape(len(protein_names), len(channel_names))
+        # Build metric arrays (filtered to display channels)
+        metrics_data = metrics.get_all_metrics()
+        n_all_chan = len(all_channel_names)
 
-            im = ax.imshow(data, cmap='Blues', interpolation='nearest')
+        spec_full = np.array([m['specificity'] for m in metrics_data]).reshape(n_prot, n_all_chan)
+        dynrange_full = np.array([m['dynamic_range'] for m in metrics_data]).reshape(
+            n_prot, n_all_chan
+        )
 
-            # add white grid
-            ax.set_xticks(np.arange(data.shape[1] + 1) - 0.5, minor=True)
-            ax.set_yticks(np.arange(data.shape[0] + 1) - 0.5, minor=True)
-            ax.grid(which="minor", color="white", linestyle='-', linewidth=2)
-            ax.tick_params(which="minor", bottom=False, left=False)
+        spec_data = spec_full[:, display_indices]
+        dynrange_data = dynrange_full[:, display_indices]
 
-            # set major ticks for labels
-            ax.set_xticks(np.arange(len(channel_names)))
-            ax.set_yticks(np.arange(len(ctx['protein_names'])))
-            ax.set_xticklabels(channel_names, rotation=45, ha='right')
-            ax.set_yticklabels(ctx['protein_names'])
+        # Compute saturation proportions (use full data if show_all_channels)
+        sat_data = None
+        if show_all_channels and hasattr(self, '_controls_values_full'):
+            ctrl_vals = self._controls_values_full
+            ctrl_masks = self._controls_masks_full
+            sat_thresh = utils.estimate_saturation_thresholds(ctrl_vals)
+        elif hasattr(self, '_saturarion_thresholds') and self._saturarion_thresholds is not None:
+            ctrl_vals = self._controls_values
+            ctrl_masks = self._controls_masks
+            sat_thresh = self._saturarion_thresholds
+        else:
+            ctrl_vals = ctrl_masks = sat_thresh = None
 
-            ax.set_title(title)
+        if ctrl_vals is not None:
+            single_masks = ctrl_masks.sum(axis=1) == 1
+            sat_data = np.zeros((n_prot, n_disp_chan))
+            for pid in range(n_prot):
+                prot_mask = np.logical_and(single_masks, ctrl_masks[:, pid])
+                if np.any(prot_mask):
+                    prot_vals = ctrl_vals[prot_mask]
+                    for di, ci in enumerate(display_indices):
+                        if ci < prot_vals.shape[1] and ci < sat_thresh.shape[0]:
+                            saturated = np.logical_or(
+                                prot_vals[:, ci] <= sat_thresh[ci, 0],
+                                prot_vals[:, ci] >= sat_thresh[ci, 1],
+                            )
+                            sat_data[pid, di] = saturated.sum() / len(saturated)
 
-            # remove spines
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+        # Compute grades
+        grades = _compute_quality_grades(metrics, reference_channels, display_indices)
 
-            # add colorbar
-            from mpl_toolkits.axes_grid1 import make_axes_locatable, axes_size
+        # Compute colormap bounds for consistent coloring
+        spec_vmin = 0.1
+        spec_vmax = max(10.0, np.nanmax(spec_data))
 
-            aspect = 10
-            pad_fraction = 0.5
-            divider = make_axes_locatable(ax)
-            width = axes_size.AxesY(ax, aspect=1.0 / aspect)
-            pad = axes_size.Fraction(pad_fraction, width)
-            cax = divider.append_axes("right", size=width, pad=pad)
-            fig.colorbar(im, cax=cax)
+        # Layout: Summary | Specificity | Correlations
+        n_rows = 3 if show_correlations else 2
+        height_ratios = [0.15, 1.0, 0.8] if show_correlations else [0.15, 1.0]
+        fig_height = 12 if show_correlations else 7
+        fig_width = max(12, n_disp_chan * 1.5)
 
-            # add text annotations
-            for y in range(data.shape[0]):
-                for x in range(data.shape[1]):
-                    value = data[y, x]
-                    midpoint = ((np.max(data) - np.min(data)) / 2) + np.min(data)
-                    color = 'black' if value < midpoint else 'white'
-                    text = f'{value:.2f}'
-                    ax.text(x, y, text, ha='center', va='center', color=color, weight='bold')
+        fig = plt.figure(figsize=(fig_width, fig_height), dpi=120)
+        gs = GridSpec(n_rows, 1, height_ratios=height_ratios, hspace=0.40, figure=fig)
 
-            if show_all_channels:
-                selected_indices = [channel_names.index(ch) for ch in self._channel_names]
-                for idx in selected_indices:
-                    ax.get_xticklabels()[idx].set_color(marker_color)
+        # Summary bar (using same colormap bounds as heatmap)
+        ax_summary = fig.add_subplot(gs[0])
+        _render_summary_bar(ax_summary, grades, spec_vmin=spec_vmin, spec_vmax=spec_vmax)
 
-        plt.tight_layout()
+        # Specificity heatmap (main panel)
+        ax_spec = fig.add_subplot(gs[1])
+        _render_specificity_heatmap(
+            ax_spec,
+            spec_data,
+            dynrange_data,
+            sat_data,
+            protein_names,
+            display_channels,
+            reference_markers=ref_to_display,
+        )
+
+        # Highlight selected channels if showing all
+        if show_all_channels and hasattr(self, '_channel_names'):
+            selected_in_display = [
+                display_channels.index(ch) for ch in self._channel_names if ch in display_channels
+            ]
+            for idx in selected_in_display:
+                if idx < len(ax_spec.get_xticklabels()):
+                    ax_spec.get_xticklabels()[idx].set_color(marker_color)
+
+        # Correlation panel (full row)
+        if show_correlations:
+            ax_corr = fig.add_subplot(gs[2])
+            _render_correlation_panel(
+                ax_corr, metrics.correlations, display_channels, display_indices
+            )
+
+        fig.suptitle('Channel Quality Dashboard', fontsize=14, fontweight='bold', y=0.98)
+        plt.tight_layout(rect=(0, 0, 1, 0.97))
         figures.append(DiagnosticFigure(fig=fig, name='Channel quality metrics'))
         return figures

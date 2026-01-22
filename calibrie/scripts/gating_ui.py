@@ -12,10 +12,11 @@ LEFT_PANEL_WIDTH = 340
 
 def export():
     file = xdialog.save_file("Save gating task", filetypes=[('gating_task', '*.yaml')])
+    if not file:
+        return
     loader = dr.DraconLoader()
     loader.yaml.representer.full_module_path = False
     dmp = loader.dump(gating_task)
-    print(dmp)
     with open(file, 'w') as f:
         f.write(dmp)
 
@@ -29,7 +30,7 @@ def load_gating_task(file):
 
 
 def load():
-    file = xdialog.open_file("Open gating task")
+    file = xdialog.open_file("Open gating task", filetypes=[('gating_task', '*.yaml')])
     global gating_task, gating_files
     new_gating_task = load_gating_task(file)
     print(f'Loaded gating task: {new_gating_task}')

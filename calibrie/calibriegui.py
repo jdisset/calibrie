@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 ## {{{                          --     import     --
@@ -410,10 +410,12 @@ class ListManager(UIElement):
     def add(self, parent: int | str, **_):  # adds the manager to the parent container
         self.parent = parent
         assert self.getter is not None, 'Getter not bound'
+        assert self.setter is not None, 'Setter not bound'
 
         the_list = self.getter()
         list_copy = [e for e in the_list]
-        the_list.clear()
+        # Use setter to clear (required for Dracon serialization)
+        self.setter([])
 
         dpg.add_group(parent=self.parent, tag=self._tag)
         self._add_btn = dpg.add_button(
@@ -428,14 +430,15 @@ class ListManager(UIElement):
 
     def append(self, item):
         assert self.getter is not None, 'Getter not bound'
+        assert self.setter is not None, 'Setter not bound'
         this_list = self.getter()
         if not self.allow_duplicates:
             if item in this_list:
                 return
 
-
         index = len(this_list)
-        this_list.append(item)
+        # Use setter to trigger field assignment (required for Dracon serialization)
+        self.setter([*this_list, item])
 
         def it_getter():
             assert self.getter is not None, 'Getter not bound'

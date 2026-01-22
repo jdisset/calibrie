@@ -1,5 +1,5 @@
 # File: calibrie/scripts/run_pipeline.py
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 import dracon as dr
@@ -153,7 +153,7 @@ class CalibrationProgram(LazyDraconModel):
 
         ctx['$PIPELINE_NAME'] = self._resolved_pipeline.get_namehash()
 
-        self._outputdir = self.outputdir.construct(context=ctx).resolve()
+        self._outputdir = self.outputdir.construct(context=ctx)
         self._outputdir = Path(self._outputdir).expanduser().resolve()
 
         self._outputdir.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 from pathlib import Path
@@ -6,7 +6,6 @@ from dracon.utils import list_like, dict_like
 from copy import deepcopy
 import numpy as np
 import pandas as pd
-import fcsparser
 import jax.numpy as jnp
 from copy import deepcopy
 import jax
@@ -41,6 +40,8 @@ import importlib.resources as pkg_resources
 import logging
 
 logger = logging.getLogger(__name__)
+
+from .fcs_utils import parse_fcs_data
 
 config_path = Path(str(pkg_resources.files('calibrie') / 'config'))
 
@@ -256,6 +257,19 @@ def escape(x):
     return x
 
 
+def color_from_filename(filename: str) -> tuple[int, int, int, int]:
+    """Generate deterministic RGBA color from filename hash."""
+    import colorsys
+    import hashlib
+
+    h = hashlib.md5(filename.encode()).hexdigest()
+    hue = int(h[:4], 16) % 360
+    sat = 0.6 + (int(h[4:6], 16) % 40) / 100
+    val = 0.7 + (int(h[6:8], 16) % 30) / 100
+    r, g, b = colorsys.hsv_to_rgb(hue / 360, sat, val)
+    return (int(r * 255), int(g * 255), int(b * 255), 200)
+
+
 def astuple(x):
     if isinstance(x, tuple):
         return x
@@ -266,11 +280,15 @@ def astuple(x):
 
 def load_fcs_to_df(fcs_file):
     try:
-        meta, data = fcsparser.parse(str(fcs_file), reformat_meta=True)
-
-        data.columns = escape(list(data.columns))
-
-        return data
+        file_bytes = Path(fcs_file).read_bytes()
+        result = parse_fcs_data(file_bytes)
+        packed = result["data_packed"]
+        arr = np.frombuffer(packed["data_bytes"], dtype=np.float32)
+        shape = packed["shape"]
+        data = arr.reshape(shape)
+        df = pd.DataFrame(data, columns=result["channels"])
+        df.columns = escape(list(df.columns))
+        return df
 
     except Exception as e:
         logger.error(f"Failed to load FCS file: {fcs_file}. Error: {e}")

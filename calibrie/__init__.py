@@ -1,9 +1,9 @@
-# Copyright (c) 2025 Jean Disset
+# Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
 from .pipeline import *
 
-from .gating import GatingTask, PolygonGate
+from .gating_v2.gating import GatingTask, PolygonGate
 from .linearcompensation import LinearCompensation
 from .nonlinearunmixing import hellonls, fit_reference_functions, NonLinearUnmixing
 from .loadcontrols import LoadControls
