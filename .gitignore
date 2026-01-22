@@ -160,3 +160,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 site/
+calibrie/tests/node_modules
+calibrie/tests/playwright-report
+calibrie/tests/test-results
