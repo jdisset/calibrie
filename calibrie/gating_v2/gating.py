@@ -26,8 +26,8 @@ from calibrie.fcs_utils import (
     _parse_int,
     _bytes_from_pnb,
 )
-from declair_ui.layout import Cols, Panel, Rows, Sidebar, UIConfig
-from declair_ui.widgets import ColorPicker, DensityPlot, Dropdown, FileList, PolygonDrawer, TreeList
+from declair_ui.layout import Cols, Panel, Rows, Sidebar, Slot, UIConfig
+from declair_ui.widgets import ColorPicker, DensityPlot, Dropdown, FileList, GateToolTray, PolygonDrawer, TreeList
 
 _gating_instance: "GatingTask | None" = None
 
@@ -47,9 +47,10 @@ def random_color():
 
 def points_in_polygon(
     vertices: list[tuple[float, float]], x: list[float], y: list[float]
-) -> list[bool]:
+) -> object:
+    import numpy as np
     if len(vertices) < 3:
-        return [False] * len(x)
+        return np.zeros(len(x), dtype=bool)
     x_arr, y_arr = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
     v = np.asarray(vertices, dtype=np.float64)
     xi, yi, xj, yj = v[:, 0], v[:, 1], np.roll(v[:, 0], -1), np.roll(v[:, 1], -1)
@@ -58,7 +59,7 @@ def points_in_polygon(
     t = np.where(
         dy[:, None] != 0, (y_arr - yi[:, None]) / dy[:, None] * (xj - xi)[:, None] + xi[:, None], 0
     )
-    return ((np.count_nonzero(cond & (x_arr < t), axis=0) & 1).astype(bool)).tolist()
+    return (np.count_nonzero(cond & (x_arr < t), axis=0) & 1).astype(bool)
 
 
 class GateStatistics(BaseModel):
@@ -79,7 +80,7 @@ def compute_gate_statistics(
     n_total = len(x)
     if n_total == 0:
         return GateStatistics()
-    gate_mask = np.array(points_in_polygon(vertices, x, y))
+    gate_mask = points_in_polygon(vertices, x, y)
     if parent_mask is not None:
         parent_arr = np.asarray(parent_mask, dtype=bool)
         combined_mask, parent_count = gate_mask & parent_arr, int(parent_arr.sum())
@@ -137,12 +138,22 @@ def load_fcs_data(file_bytes: bytes, filename: str, report_progress=None) -> dic
 load_fcs_data.supports_progress = True
 
 
-@client_runnable
-def compute_plot_data(files: list[dict], xaxis: str, yaxis: str) -> dict:
+#TODO: shorter simpler code?
+@client_runnable(helpers=[points_in_polygon])
+def compute_plot_data(
+    files: list[dict],
+    xaxis: str,
+    yaxis: str,
+    gates: list[dict] | None = None,
+    selected_gate_index: int | None = None,
+) -> dict:
     """Compute multi-source plot data client-side from cached file data.
 
     Files are grouped by their 'group' field. Files without a group are
     merged into a single "All Files" source.
+
+    Supports hierarchical filtering: when a gate is selected, only events
+    passing through applied parent gates are shown.
 
     Supports both binary transfer (preview_data_binary with numpy array) and
     legacy JSON transfer (preview_data with nested arrays).
@@ -151,83 +162,208 @@ def compute_plot_data(files: list[dict], xaxis: str, yaxis: str) -> dict:
     """
     import numpy as np
 
-    if not xaxis or not yaxis:
+    def compute_parent_chain_mask(
+        gates_list: list[dict],
+        gate: dict,
+        all_data: dict,
+    ) -> object:
+        """Walk parent chain, apply masks for gates with applied=True."""
+        gate_by_name = {g["name"]: g for g in gates_list}
+        n_points = len(next(iter(all_data.values())))
+        mask = np.ones(n_points, dtype=bool)
+
+        parent_name = gate.get("parent_gate")
+        while parent_name:
+            parent = gate_by_name.get(parent_name)
+            if not parent:
+                break
+            if parent.get("applied", False):
+                vertices = parent.get("vertices", [])
+                if len(vertices) >= 3:
+                    px = all_data.get(parent["xchannel"])
+                    py = all_data.get(parent["ychannel"])
+                    if px is not None and py is not None:
+                        parent_in = points_in_polygon(vertices, px, py)
+                        mask = mask & parent_in
+            parent_name = parent.get("parent_gate")
+
+        return mask if not np.all(mask) else None
+
+    active_xaxis = xaxis
+    active_yaxis = yaxis
+
+    if gates is None:
+        gates = []
+
+    if selected_gate_index is not None and selected_gate_index >= 0:
+        if selected_gate_index < len(gates):
+            gate = gates[selected_gate_index]
+            gate_x = gate.get("xchannel")
+            gate_y = gate.get("ychannel")
+            if gate_x and gate_y:
+                active_xaxis = gate_x
+                active_yaxis = gate_y
+
+    if not active_xaxis or not active_yaxis:
+        return {}
+    if not files:
         return {}
 
-    default_group = "All Files"
-    grouped: dict[str, dict] = {}
-    group_order: list[str] = []
+    def file_signature(file_list: list[dict]) -> tuple:
+        sig: list[tuple] = []
+        for f in file_list:
+            if not f or not isinstance(f, dict):
+                sig.append(("?", False, (), 0))
+                continue
+            path = f.get("path") or f.get("filename") or ""
+            visible = bool(f.get("visible", True))
+            channels = tuple(f.get("channels") or ())
+            binary = f.get("preview_data_binary")
+            if isinstance(binary, np.ndarray) and binary.ndim == 2:
+                n = int(binary.shape[0])
+            else:
+                data = f.get("preview_data")
+                n = len(data) if isinstance(data, list) else 0
+            sig.append((path, visible, channels, n))
+        return tuple(sig)
 
-    for f in files:
-        if not f.get("visible", True) or not f.get("channels"):
-            continue
-        channels = f["channels"]
-        if xaxis not in channels or yaxis not in channels:
-            continue
+    global _calibrie_plot_cache
+    try:
+        _calibrie_plot_cache
+    except NameError:
+        _calibrie_plot_cache = {}
 
-        # Try binary format first (zero-copy transfer from JS)
-        binary = f.get("preview_data_binary")
-        if binary is not None:
-            arr = None
-            # Handle direct numpy array
-            if isinstance(binary, np.ndarray):
+    files_key = file_signature(files)
+    cache_key = (files_key, active_xaxis, active_yaxis)
+    cache = _calibrie_plot_cache.get("data")
+    if not cache or cache.get("key") != cache_key:
+        chunks_x: list[np.ndarray] = []
+        chunks_y: list[np.ndarray] = []
+        for f in files:
+            if not f.get("visible", True) or not f.get("channels"):
+                continue
+            channels = f["channels"]
+
+            binary = f.get("preview_data_binary")
+            if isinstance(binary, np.ndarray) and binary.ndim == 2:
                 arr = binary
             else:
-                # Handle JsProxy object with data/shape fields (attribute access)
-                bin_data = getattr(binary, "data", None)
-                bin_shape = getattr(binary, "shape", None)
-                # Fallback to dict-style access
-                if bin_data is None and hasattr(binary, "get"):
-                    bin_data = binary.get("data")
-                    bin_shape = binary.get("shape")
-                # Fallback to subscript access
-                if bin_data is None:
-                    try:
-                        bin_data = binary["data"]
-                        bin_shape = binary["shape"]
-                    except (KeyError, TypeError):
-                        pass
-                if bin_data is not None:
-                    arr = np.asarray(bin_data, dtype=np.float32)
-                    if bin_shape:
-                        shape_list = list(bin_shape) if hasattr(bin_shape, "__iter__") else bin_shape
-                        arr = arr.reshape(shape_list)
-            if arr is not None and arr.ndim == 2 and arr.shape[1] == 2:
-                x, y = arr[:, 0], arr[:, 1]
+                arr = None
+
+            if arr is None:
+                data = f.get("preview_data")
+                if not data:
+                    continue
+                arr = np.asarray(data, dtype=np.float32)
+                if arr.ndim != 2:
+                    continue
+
+            if len(channels) >= 2 and channels[0] == active_xaxis and channels[1] == active_yaxis and arr.shape[1] >= 2:
+                xi, yi = 0, 1
             else:
+                try:
+                    xi = channels.index(active_xaxis)
+                    yi = channels.index(active_yaxis)
+                except ValueError:
+                    continue
+
+            if xi >= arr.shape[1] or yi >= arr.shape[1]:
                 continue
-        else:
-            # Fall back to legacy JSON format
-            data = f.get("preview_data")
-            if not data:
+
+            chunks_x.append(arr[:, xi])
+            chunks_y.append(arr[:, yi])
+
+        if not chunks_x:
+            return {}
+
+        total = sum(int(c.shape[0]) for c in chunks_x)
+        x_all = np.empty(total, dtype=np.float32)
+        y_all = np.empty(total, dtype=np.float32)
+        offset = 0
+        for cx, cy in zip(chunks_x, chunks_y):
+            n = int(cx.shape[0])
+            if n == 0:
                 continue
-            xi, yi = channels.index(xaxis), channels.index(yaxis)
-            arr = np.asarray(data, dtype=np.float64)
-            if arr.ndim != 2 or arr.shape[1] <= max(xi, yi):
-                continue
-            x, y = arr[:, xi], arr[:, yi]
+            x_all[offset : offset + n] = cx
+            y_all[offset : offset + n] = cy
+            offset += n
+        if offset != total:
+            x_all = x_all[:offset]
+            y_all = y_all[:offset]
 
-        group = f.get("group") or ""
-        key = group.strip() if isinstance(group, str) and group.strip() else default_group
+        cache = {
+            "key": cache_key,
+            "x_all": x_all,
+            "y_all": y_all,
+            "x_list": x_all.tolist(),
+            "y_list": y_all.tolist(),
+            "mask_cache": {},
+        }
+        _calibrie_plot_cache["data"] = cache
 
-        if key not in grouped:
-            grouped[key] = {"x": [], "y": [], "label": key}
-            group_order.append(key)
-        grouped[key]["x"].append(x)
-        grouped[key]["y"].append(y)
+    x_all = cache["x_all"]
+    y_all = cache["y_all"]
+    if len(x_all) == 0:
+        return {}
 
-    sources = []
-    for key in group_order:
-        grp = grouped[key]
-        x_all = np.concatenate(grp["x"]) if grp["x"] else np.array([])
-        y_all = np.concatenate(grp["y"]) if grp["y"] else np.array([])
-        sources.append({"x": x_all.tolist(), "y": y_all.tolist(), "label": grp["label"]})
+    all_data = {active_xaxis: x_all, active_yaxis: y_all}
+    label = "Filtered" if (gates and selected_gate_index is not None and selected_gate_index >= 0) else "All Files"
 
-    return {"sources": sources} if sources else {}
+    if gates and selected_gate_index is not None and 0 <= selected_gate_index < len(gates):
+        gate = gates[selected_gate_index]
+        gate_by_name = {g["name"]: g for g in gates}
+
+        chain_sig: list[tuple] = []
+        parent_name = gate.get("parent_gate")
+        while parent_name:
+            parent = gate_by_name.get(parent_name)
+            if not parent:
+                break
+            chain_sig.append(
+                (
+                    parent.get("name"),
+                    bool(parent.get("applied", False)),
+                    parent.get("xchannel"),
+                    parent.get("ychannel"),
+                    tuple(tuple(v) for v in (parent.get("vertices") or ())),
+                )
+            )
+            parent_name = parent.get("parent_gate")
+        chain_sig_t = tuple(chain_sig)
+
+        mask_cache = cache.get("mask_cache", {})
+        mask_key = (cache_key, chain_sig_t)
+        cached_mask = mask_cache.get(mask_key)
+        if cached_mask is not None:
+            if cached_mask is False:
+                return {"sources": [{"x": cache["x_list"], "y": cache["y_list"], "label": label}]}
+            x_list, y_list = cached_mask
+            return {"sources": [{"x": x_list, "y": y_list, "label": label}]}
+
+        parent_mask = compute_parent_chain_mask(gates, gate, all_data)
+        if parent_mask is None or len(parent_mask) != len(x_all):
+            mask_cache[mask_key] = False
+            cache["mask_cache"] = mask_cache
+            return {"sources": [{"x": cache["x_list"], "y": cache["y_list"], "label": label}]}
+
+        x_f = x_all[parent_mask]
+        y_f = y_all[parent_mask]
+        x_list = x_f.tolist()
+        y_list = y_f.tolist()
+        mask_cache[mask_key] = (x_list, y_list)
+        cache["mask_cache"] = mask_cache
+        return {"sources": [{"x": x_list, "y": y_list, "label": label}]}
+
+    return {"sources": [{"x": cache["x_list"], "y": cache["y_list"], "label": label}]}
 
 
 class PolygonGate(BaseModel):
+    gate_type: Literal["Polygon"] = "Polygon"
     name: str = "Gate"
+    gate_mode: Annotated[
+        Literal["navigation", "polygon_gate"],
+        UI(hidden=True),
+    ] = "navigation"
     xchannel: Chan = ""
     ychannel: Chan = ""
     vertices: Annotated[
@@ -253,7 +389,7 @@ class PolygonGate(BaseModel):
     stats_summary: str = Field(default="No data", exclude=True)
 
     def contains_points(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        return np.array(points_in_polygon(list(self.vertices), x.tolist(), y.tolist()), dtype=bool)
+        return points_in_polygon(list(self.vertices), x, y)
 
     def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
         if len(self.vertices) < 3:
@@ -295,6 +431,18 @@ class GatingTask(Task):
     ] = Field(default_factory=list, exclude=True)
     xaxis: Annotated[Chan, UI(label="X Channel")] = Field(default="", exclude=True)
     yaxis: Annotated[Chan, UI(label="Y Channel")] = Field(default="", exclude=True)
+    gate_tools: Annotated[
+        dict,
+        UI(
+            GateToolTray(
+                gates_field="gates",
+                selection_field="selected_gate_index",
+                gate_type_field="gate_type",
+                gate_type_choices=["Polygon"],
+                plot_ref="main-plot",
+            )
+        ),
+    ] = Field(default_factory=dict, exclude=True)
     plot_data: Annotated[
         dict,
         UI(
@@ -305,17 +453,37 @@ class GatingTask(Task):
                 default_y_transform="symlog",
                 x_axis_slot="xaxis",
                 y_axis_slot="yaxis",
+                axis_slot_editable_field="selected_gate_index",
+                axis_slot_editable_value=-1,
+                view_state_key_field="selected_gate_index",
             ),
             provides="main-plot",
         ),
-        ClientComputed(compute=compute_plot_data, depends_on=["files", "xaxis", "yaxis"]),
+        ClientComputed(compute=compute_plot_data, depends_on=["files", "xaxis", "yaxis", "gates", "selected_gate_index"], preparation="flow-cytometry"),
     ] = Field(default_factory=dict, exclude=True)
     selected_gate_index: int = Field(default=-1, exclude=True)
 
     ui_config: ClassVar[UIConfig] = UIConfig(
+        bottom_bar=True,
         layout=Cols(
             Sidebar("files", "gates", width=300),
-            Panel("plot_data", overlays=[("gates", "vertices")]),
+            Rows(
+                Slot(
+                    "gates",
+                    widget_override="list-editor",
+                    config_override={
+                        "compact": True,
+                        "selectable": True,
+                        "tab_style": True,
+                        "display_field": "name",
+                        "color_field": "color",
+                        "selection_field": "selected_gate_index",
+                        "prepend_tab": {"label": "Main View", "index": -1},
+                    },
+                ),
+                Panel("gate_tools"),
+                Panel("plot_data", overlays=[("gates", "vertices", "selected_gate_index >= 0")]),
+            ),
         )
     )
     client_functions: ClassVar = [compute_gate_statistics]
@@ -480,20 +648,31 @@ class GatingTask(Task):
 GatingSession = GatingTask
 
 
-def main() -> GatingTask:
+def main(backend: Literal["browser", "native"] = "native") -> GatingTask:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    if backend == "native":
+        try:
+            import webview  # noqa: F401
+        except ImportError:
+            logging.getLogger(__name__).warning(
+                "pywebview not installed, using browser. Install: pip install 'calibrie[native]'"
+            )
+            backend = "browser"
     task = GatingTask()
-    return render(task, title="Calibrie Gating", channels_handler=_get_channels)
+    return render(task, title="Calibrie Gating", channels_handler=_get_channels, backend=backend)
 
 
 def cli() -> None:
-    if len(sys.argv) > 1:
-        logging.getLogger(__name__).info("CLI args ignored. Use UI file picker.")
-    result = main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Calibrie Gating UI")
+    parser.add_argument("--browser", "-b", action="store_true", help="Open in browser instead of native window")
+    args, _ = parser.parse_known_args()
+    backend = "browser" if args.browser else "native"
+    result = main(backend=backend)
     if result:
         print(f"Session: {len(result.files)} files, {len(result.gates)} gates")
 

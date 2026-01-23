@@ -3,7 +3,8 @@
 
 from .pipeline import *
 
-from .gating_v2.gating import GatingTask, PolygonGate
+# from .gating_v2.gating import GatingTask, PolygonGate
+from .gating import GatingTask, PolygonGate
 from .linearcompensation import LinearCompensation
 from .nonlinearunmixing import hellonls, fit_reference_functions, NonLinearUnmixing
 from .loadcontrols import LoadControls
