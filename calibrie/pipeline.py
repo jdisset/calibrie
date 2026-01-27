@@ -88,13 +88,14 @@ class Pipeline(ArbitraryModel):
             task._log.setLevel(self.loglevel)
 
     def get_namehash(self):
-        self_json = self.model_dump()
-        if "name" in self_json:
-            del self_json["name"]
-        if "loglevel" in self_json:
-            del self_json["loglevel"]
-        self_json = json.dumps(self_json, sort_keys=True)
+        self_dict = self.model_dump(mode='json')
+        self_dict.pop("name", None)
+        self_dict.pop("loglevel", None)
+        self_json = json.dumps(self_dict, sort_keys=True)
         return f"{self.name}-{generate_hash(self_json)}"
+
+    def model_dump_json_safe(self) -> str:
+        return self.model_dump_json()
 
     def order_tasks_and_assign_names(self):
         # make sure each task has its name

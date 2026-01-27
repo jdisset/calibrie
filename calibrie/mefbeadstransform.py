@@ -5,6 +5,7 @@ from jaxopt import GaussNewton
 import matplotlib.patches as patches
 from calibrie.utils import Escaped
 from .pipeline import Task, DiagnosticFigure
+from .gating import GatingTask
 from .metrics import TaskMetrics
 from collections import defaultdict
 from copy import deepcopy
@@ -61,6 +62,8 @@ class MEFBeadsTransform(Task):
     saturation_min: Optional[float] = -100
     saturation_max: Optional[float] = 1e8
     apply_on_load: bool = False  # if yes, will replace the cell_data_loader with a version that loads MEF values instead of AU
+    beads_gating: Optional[GatingTask] = None
+    sparse_peak_boost: float = Field(default=0.0, ge=0.0, le=1.0)  # 0=mass-driven peak detection, 1=equal weight per bead regardless of observation count
 
     def model_post_init(self, *args, **kwargs):
         super().model_post_init(*args, **kwargs)
@@ -141,9 +144,12 @@ class MEFBeadsTransform(Task):
 
         self._log.debug(f'For beads, using channels: {self.use_channels}')
 
-        self._beads_data_array = utils.load_to_df(self.beads_data, self.use_channels).values
+        beads_df = utils.load_to_df(self.beads_data)
+        if self.beads_gating:
+            beads_df = self.beads_gating.apply_all_gates(beads_df)
+        self._beads_data_array = beads_df[self.use_channels].values
         if self._beads_data_array.shape[0] == 0:
-            raise ValueError('Beads data is empty')
+            raise ValueError('Beads data is empty (after gating)' if self.beads_gating else 'Beads data is empty')
 
         self._beads_mef_array = np.array(
             [self.beads_mef_values[self.channel_units[c]] for c in self.use_channels]
@@ -258,9 +264,24 @@ class MEFBeadsTransform(Task):
         self._saturation_thresholds_tr = self._tr(self._saturation_thresholds)
         self._log.debug(f'Computing votes')
 
+        # Compute observation weights for OT source marginal
+        # When sparse_peak_boost > 0, observations in sparse regions get upweighted via inverse density
+        n_obs, n_chan = self._obs_tr.shape
+        uniform = jnp.ones((n_obs, n_chan)) / n_obs
+        if self.sparse_peak_boost > 0:
+            obs_density = jnp.array([
+                gaussian_kde(self._obs_tr[:, c], bw_method=0.1)(self._obs_tr[:, c])
+                for c in range(n_chan)
+            ]).T
+            inv_density = 1.0 / jnp.maximum(obs_density, 1e-10)
+            inv_density = inv_density / inv_density.sum(axis=0, keepdims=True)
+            obs_weights = (1 - self.sparse_peak_boost) * uniform + self.sparse_peak_boost * inv_density
+        else:
+            obs_weights = uniform
+
         @jit
-        @partial(vmap, in_axes=(1, 1))
-        def vote(chan_observations, chan_mef):
+        @partial(vmap, in_axes=(1, 1, 1))
+        def vote(chan_observations, chan_mef, chan_weights):
             """Compute the vote matrix"""
             # it's a (CHANNEL, OBSERVATIONS, BEAD) matrix
             # where each channel tells what affinity each observation has to each bead, from the channel's perspective.
@@ -269,11 +290,12 @@ class MEFBeadsTransform(Task):
             # Low values mean it's not so obvious, usually because the observation is not in the valid range
             # so there's a bunch of points around this one that could be paired with any of the remaining beads
             # This is much more robust than just computing OT for all channels at once
+            # When chan_weights diverges from uniform, sparse regions get more influence (peak-driven vs mass-driven)
             return Sinkhorn()(
-                LinearProblem(PointCloud(chan_observations[:, None], chan_mef[:, None]))
+                LinearProblem(PointCloud(chan_observations[:, None], chan_mef[:, None]), a=chan_weights)
             ).matrix
 
-        votes = vote(self._obs_tr, self._mef_tr)  # (CHANNELS, OBSERVATIONS, BEADS)
+        votes = vote(self._obs_tr, self._mef_tr, obs_weights)  # (CHANNELS, OBSERVATIONS, BEADS)
         valid_votes = votes * not_saturated[:, :, None] + 1e-12  # (CHANNELS, OBSERVATIONS, BEADS)
         vmat = (
             np.sum(valid_votes, axis=0) / np.sum(not_saturated, axis=0)[:, None]

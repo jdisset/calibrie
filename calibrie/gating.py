@@ -1084,7 +1084,7 @@ class GatingTask(Task, Component):
         prev_n_rows = len(df)
 
         if self.target_population is not None:
-            from calibrie.gating_v2.models import GatingSession, PolygonGate as V2PolygonGate
+            from calibrie.gating_v2 import GatingSession, PolygonGate as V2PolygonGate
             v2_gates = [
                 V2PolygonGate(
                     name=g.name,

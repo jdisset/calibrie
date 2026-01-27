@@ -1,6 +1,16 @@
 # Copyright (c) 2026 Jean Disset
 # MIT License - see LICENSE file for details.
 
+import pandas as pd
+from dracon.representer import DraconRepresenter
+
+def _represent_dataframe(representer, df):
+    if hasattr(df, 'attrs') and 'from_file' in df.attrs:
+        return representer.represent_str(str(df.attrs['from_file']))
+    raise ValueError(f"Cannot represent DataFrame without 'from_file' attr: {df.shape}")
+
+DraconRepresenter.add_representer(pd.DataFrame, _represent_dataframe)
+
 from .pipeline import *
 
 # from .gating_v2.gating import GatingTask, PolygonGate

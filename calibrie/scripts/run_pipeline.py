@@ -41,6 +41,24 @@ log = logging.getLogger(__name__)
 matplotlib.use('Agg')
 
 
+class Timer:
+    _enabled = False
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        if Timer._enabled:
+            print(f"[TIMING] {self.name}...", flush=True)
+            self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        if Timer._enabled and hasattr(self, 'start'):
+            elapsed = time.time() - self.start
+            print(f"[TIMING] {self.name} done in {elapsed:.2f}s", flush=True)
+
+
 def parse_xpfile(xpfile: str):
     filepath = Path(xpfile).expanduser().resolve()
 
@@ -121,6 +139,11 @@ class CalibrationProgram(LazyDraconModel):
         Arg(help='If set, skip generating diagnostic figures but still output metrics.'),
     ] = False
 
+    timings: Annotated[
+        bool,
+        Arg(help='If set, print timing information for each step.'),
+    ] = False
+
     def build_pipeline(self):
         self._datadir = (Path(self.xpfile).parent / self.datapath).expanduser().resolve()
         self._xpdata = parse_xpfile(self.xpfile)
@@ -146,12 +169,15 @@ class CalibrationProgram(LazyDraconModel):
         ctx['$XP_DIRNAME'] = Path(self.xpfile).parent.name
         ctx['$XP_DATADIR'] = self._datadir.as_posix()
 
-        self._resolved_pipeline = self.pipeline.construct(context=ctx)
-        resolve_all_lazy(self._resolved_pipeline)
+        with Timer("pipeline.construct"):
+            self._resolved_pipeline = self.pipeline.construct(context=ctx)
+        with Timer("resolve_all_lazy"):
+            resolve_all_lazy(self._resolved_pipeline)
         if not isinstance(self._resolved_pipeline, cal.Pipeline):
             self._resolved_pipeline = cal.Pipeline(**self._resolved_pipeline)
 
-        ctx['$PIPELINE_NAME'] = self._resolved_pipeline.get_namehash()
+        with Timer("get_namehash"):
+            ctx['$PIPELINE_NAME'] = self._resolved_pipeline.get_namehash()
 
         self._outputdir = self.outputdir.construct(context=ctx)
         self._outputdir = Path(self._outputdir).expanduser().resolve()
@@ -169,12 +195,12 @@ class CalibrationProgram(LazyDraconModel):
         data: pd.DataFrame = ctx_out.output_df
         assert isinstance(data, pd.DataFrame), f'Expected DataFrame, got {type(data)}'
 
-        pipeline_dict = self._resolved_pipeline.model_dump()
+        pipeline_json = json.loads(self._resolved_pipeline.model_dump_json_safe())
         xp_dict = {k: v for k, v in self._xpdata.items() if k != 'samples'}
         sample_dict = sample
 
         data.attrs['calibration'] = {
-            'pipeline': pipeline_dict,
+            'pipeline': pipeline_json,
             'date': time.strftime('%Y-%m-%d %H:%M:%S'),
             'raw_args': sys.argv[1:],
             'namehash': self._resolved_pipeline.get_namehash(),
@@ -211,8 +237,11 @@ class CalibrationProgram(LazyDraconModel):
             raise ValueError(f'Unsupported file format: {file_format}')
 
     def run(self):
-        self.build_pipeline()
-        self._resolved_pipeline.initialize()
+        Timer._enabled = self.timings
+        with Timer("build_pipeline"):
+            self.build_pipeline()
+        with Timer("pipeline.initialize"):
+            self._resolved_pipeline.initialize()
         if not self.skip_diagnostics:
             if self.diagnostics_output_dir:
                 diag_output_dir = Path(self.diagnostics_output_dir).expanduser().resolve()
@@ -223,11 +252,13 @@ class CalibrationProgram(LazyDraconModel):
                     .resolve()
                 )
             if not self.no_figures:
-                run_and_save_diagnostics(self._resolved_pipeline, diag_output_dir.as_posix())
-            self._resolved_pipeline.save_metrics(diag_output_dir)
+                with Timer("run_and_save_diagnostics"):
+                    run_and_save_diagnostics(self._resolved_pipeline, diag_output_dir.as_posix())
+            with Timer("save_metrics"):
+                self._resolved_pipeline.save_metrics(diag_output_dir)
 
-        # save the full pipeline
-        pipeline_dump = dr.dump(self._resolved_pipeline)
+        with Timer("dr.dump pipeline"):
+            pipeline_dump = dr.dump(self._resolved_pipeline)
         with open(self._outputdir / 'calibration.yaml', 'w') as f:
             f.write(pipeline_dump)
 
@@ -235,8 +266,9 @@ class CalibrationProgram(LazyDraconModel):
             samples = self._xpdata['samples']
             for s in samples:
                 if not s['control']:
-                    print(f"Processing sample {s['name']}")
-                    self.calibrate_file(s, self.export_format)
+                    with Timer(f"calibrate {s['name']}"):
+                        print(f"Processing sample {s['name']}")
+                        self.calibrate_file(s, self.export_format)
 
 
 def main():
